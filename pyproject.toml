@@ -1,0 +1,23 @@
+[project]
+name = "denoisingzoo"
+version = "0.1.0"
+description = "Minimal denoising research sandbox"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Kyle" }]
+license = { text = "MIT" }
+keywords = ["pytorch", "denoising", "research"]
+
+dependencies = [
+  "torch==2.8.0",
+  "hydra-core>=1.3,<2.0",
+  "omegaconf>=2.3,<3.0",
+  "numpy>=1.26",
+]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+# uv will honor [project] metadata; this section is available for future settings.

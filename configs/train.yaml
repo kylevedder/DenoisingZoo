@@ -1,0 +1,42 @@
+# Device and precision
+device: mps          # choices: cpu, cuda, mps (on Apple)
+precision: fp32       # choices: fp32, bf16, fp16
+
+# Training
+epochs: 100
+batch_size: 1024
+shuffle: true
+num_workers: 0
+pin_memory: true
+drop_last: false
+
+# Dataset (Hydra-instantiable)
+dataset:
+  _target_: dataloaders.kmeans_dataset.GaussianKMeansDataset
+  centroids:
+    - [2, 2]
+    - [-2, 2]
+    - [-2, -2]
+    - [2, -2]
+  length: 20000
+  source_std: 1.0
+  target_std: 0.1
+  seed: 69
+
+# Model (Hydra-instantiable)
+model:
+  _target_: models.mlp.MLP
+  feature_dim: 2
+  hidden_dim: 256
+
+# Optimizer (Hydra-instantiable)
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-3
+  weight_decay: 0.0
+
+# Loss (Hydra-instantiable)
+loss:
+  _target_: torch.nn.MSELoss
+
+
