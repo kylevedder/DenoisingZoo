@@ -4,19 +4,6 @@
 
 This project is set up to run natively on macOS with Apple Silicon using the Metal (MPS) backend in PyTorch. We use `uv` for fast, reproducible Python environments.
 
-### Prerequisites
-- macOS on Apple Silicon (M1/M2/M3)
-- Homebrew installed
-  - If you don't have it:
-    ```bash
-    NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-    echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
-    eval "$(/opt/homebrew/bin/brew shellenv)"
-    ```
-- uv installed
-  ```bash
-  brew install uv
-  ```
 
 ### Quick start (recommended)
 The `train.sh` script prepares the environment, syncs dependencies, auto-detects MPS, and runs training.
@@ -41,23 +28,6 @@ mps backend present: True
 mps available: True
 selected device: mps
 sample tensor device: mps:0
-```
-
-### Manual environment commands (optional)
-If you prefer to manage the environment yourself:
-
-```bash
-# Create & activate a Python 3.12 venv managed by uv
-uv venv --python 3.12 .venv
-source .venv/bin/activate
-
-# Reproduce the environment from lockfile
-uv sync --no-install-project
-
-# Run training
-python train.py device=mps
-# or
-uv run python train.py device=mps
 ```
 
 ### Configuration

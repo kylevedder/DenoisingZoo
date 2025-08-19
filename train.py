@@ -7,6 +7,7 @@ from omegaconf import DictConfig, OmegaConf
 
 import torch
 from torch.utils.data import DataLoader
+import tqdm
 
 from helpers import (
     PrecisionSettings,
@@ -18,6 +19,8 @@ from helpers import (
     build_model,
     build_optimizer,
     build_criterion,
+    save_checkpoint,
+    load_checkpoint,
 )
 
 
@@ -58,7 +61,8 @@ def train_one_epoch(
     running_loss = 0.0
     num_batches = 0
 
-    for batch in loader:
+    bar = tqdm.tqdm(loader)
+    for batch in bar:
         optimizer.zero_grad(set_to_none=True)
         loss = compute_loss(model, batch, device, settings, criterion)
 
@@ -72,6 +76,7 @@ def train_one_epoch(
 
         running_loss += loss.detach().item()
         num_batches += 1
+        bar.set_description(f"loss: {running_loss / max(1, num_batches):.6f}")
 
     return running_loss / max(1, num_batches)
 
@@ -101,8 +106,27 @@ def train(cfg: DictConfig) -> None:
     optimizer = build_optimizer(cfg, model)
     criterion = build_criterion(cfg)
 
+    # Resume from checkpoint if requested
+    start_epoch = 1
+    ckpt_dir: str = str(cfg.get("ckpt_dir", "outputs/ckpts"))
+    ckpt_name: str = str(cfg.get("ckpt_name", "last.pt"))
+    ckpt_path = f"{ckpt_dir}/{ckpt_name}"
+    if bool(cfg.get("resume", False)) and torch.cuda.is_available() is not None:
+        try:
+            last_epoch = load_checkpoint(
+                ckpt_path,
+                model=model,
+                optimizer=optimizer,
+                scaler=scaler,
+                map_location=device,
+            )
+            start_epoch = int(last_epoch) + 1
+            print(f"Resumed from {ckpt_path} at epoch {last_epoch}")
+        except FileNotFoundError:
+            print(f"No checkpoint found at {ckpt_path}; starting fresh")
+
     epochs: int = int(cfg.get("epochs", 1))
-    for epoch in range(1, epochs + 1):
+    for epoch in range(start_epoch, epochs + 1):
         avg_loss = train_one_epoch(
             model=model,
             loader=loader,
@@ -113,6 +137,19 @@ def train(cfg: DictConfig) -> None:
             scaler=scaler,
         )
         print(f"epoch {epoch:04d} | loss {avg_loss:.6f}")
+
+        # Save checkpoint at the configured interval
+        save_every: int = int(cfg.get("save_every", 1))
+        if save_every > 0 and (epoch % save_every == 0 or epoch == epochs):
+            save_checkpoint(
+                path=ckpt_path,
+                model=model,
+                optimizer=optimizer,
+                scaler=scaler,
+                epoch=epoch,
+                cfg=cfg,
+            )
+            print(f"Saved checkpoint to {ckpt_path}")
 
 
 @hydra.main(config_path="configs", config_name="train", version_base=None)

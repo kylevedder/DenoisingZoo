@@ -3,12 +3,18 @@ device: mps          # choices: cpu, cuda, mps (on Apple)
 precision: fp32       # choices: fp32, bf16, fp16
 
 # Training
-epochs: 100
+epochs: 10
 batch_size: 1024
 shuffle: true
 num_workers: 0
 pin_memory: true
 drop_last: false
+
+# Checkpointing
+ckpt_dir: outputs/ckpts
+ckpt_name: last.pt
+resume: false
+save_every: 1   # save every N epochs
 
 # Dataset (Hydra-instantiable)
 dataset:
@@ -18,7 +24,7 @@ dataset:
     - [-2, 2]
     - [-2, -2]
     - [2, -2]
-  length: 20000
+  length: 200000
   source_std: 1.0
   target_std: 0.1
   seed: 69

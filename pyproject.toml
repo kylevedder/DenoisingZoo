@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Minimal denoising research sandbox"
 readme = "README.md"
 requires-python = ">=3.12"
-authors = [{ name = "Kyle" }]
+authors = [{ name = "Kyle Vedder" }]
 license = { text = "MIT" }
 keywords = ["pytorch", "denoising", "research"]
 
@@ -13,6 +13,8 @@ dependencies = [
   "hydra-core>=1.3,<2.0",
   "omegaconf>=2.3,<3.0",
   "numpy>=1.26",
+  "tqdm>=4.66",
+  "matplotlib>=3.8",
 ]
 
 [build-system]

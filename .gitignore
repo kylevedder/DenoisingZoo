@@ -47,9 +47,12 @@ htmlcov/
 logs/
 *.log
 
-# Hydra outputs
+# Hydra outputs and generated artifacts
 outputs/
 multirun/
+**/outputs/vis/*.png
+**/outputs/vis/*.gif
+**/outputs/ckpts/*.pt
 
 # uv
 .uv/
