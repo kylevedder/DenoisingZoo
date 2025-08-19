@@ -26,6 +26,16 @@ uv sync --no-install-project
 
 # Detect MPS availability
 DEVICE_ARG="device=mps"
+echo "[train.sh] torch version: $(python - <<'PY'
+import torch
+print(torch.__version__)
+PY
+)"
+echo "[train.sh] mps available: $(python - <<'PY'
+import torch
+print(bool(getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available()))
+PY
+)"
 MPS_OR_CPU=$(python - <<'PY'
 import torch
 print('mps' if (hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()) else 'cpu')
@@ -34,6 +44,7 @@ PY
 if [[ "${MPS_OR_CPU}" != "mps" ]]; then
   DEVICE_ARG="device=cpu"
 fi
+echo "[train.sh] selected device: ${DEVICE_ARG#device=}"
 
 # Run training (pass through any extra CLI args after this script)
 python train.py "${DEVICE_ARG}" "$@"

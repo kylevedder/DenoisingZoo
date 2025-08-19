@@ -52,7 +52,7 @@ def train_one_epoch(
     criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
     device: torch.device,
     settings: PrecisionSettings,
-    scaler: torch.cuda.amp.GradScaler,
+    scaler: torch.amp.GradScaler,
 ) -> float:
     model.train()
     running_loss = 0.0
@@ -79,8 +79,19 @@ def train_one_epoch(
 def train(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
 
+    # Runtime environment diagnostics
+    print(f"torch version: {torch.__version__}")
+    has_mps = bool(getattr(torch.backends, "mps", None))
+    mps_available = bool(has_mps and torch.backends.mps.is_available())
+    print(f"mps backend present: {has_mps}")
+    print(f"mps available: {mps_available}")
+
     device = build_device(cfg.get("device", "cuda"))
     settings = build_precision_settings(cfg.get("precision", "fp32"), device)
+    print(f"selected device: {device}")
+    if device.type == "mps":
+        sample = torch.ones(1, device=device)
+        print(f"sample tensor device: {sample.device}")
     scaler = build_scaler(settings)
 
     dataset = build_dataset(cfg)
