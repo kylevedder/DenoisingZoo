@@ -247,3 +247,34 @@ def save_if_needed(
             cfg=cfg,
         )
         print(f"Saved checkpoint to {ckpt_path}")
+
+
+# -----------------------------------------------------------------------------
+# Evaluation helpers
+# -----------------------------------------------------------------------------
+
+
+def evaluate_epoch_mse(
+    model: torch.nn.Module,
+    eval_loader: DataLoader,
+    device: torch.device,
+    solver: Any,
+) -> float:
+    """Evaluate mean squared error over an eval loader using an ODE solver.
+
+    The solver is expected to expose a `solve(initial_state)` method returning an
+    object with a `final_state` tensor attribute.
+    """
+    model.eval()
+    with torch.no_grad():
+        mse_sum = 0.0
+        num = 0
+        for batch in eval_loader:
+            x0: torch.Tensor = batch["input"].to(device)
+            y_true: torch.Tensor = batch["target"].to(device)
+            result = solver.solve(x0)
+            y_pred: torch.Tensor = result.final_state
+            mse = torch.mean((y_pred - y_true) ** 2).item()
+            mse_sum += mse
+            num += 1
+        return mse_sum / max(1, num)

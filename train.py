@@ -24,6 +24,7 @@ from helpers import (
     get_checkpoint_path,
     resume_if_requested,
     save_if_needed,
+    evaluate_epoch_mse,
 )
 from hydra.utils import instantiate
 
@@ -137,20 +138,13 @@ def train(cfg: DictConfig) -> None:
         )
         print(f"epoch {epoch:04d} | loss {avg_loss:.6f}")
 
-        # Eval: integrate ODE from source to time 1 and compare to target via MSE
-        model.eval()
-        with torch.no_grad():
-            mse_sum = 0.0
-            num = 0
-            for batch in eval_loader:
-                x0 = batch["input"].to(device)
-                y_true = batch["target"].to(device)
-                result = solver.solve(x0)
-                y_pred = result.final_state
-                mse = torch.mean((y_pred - y_true) ** 2).item()
-                mse_sum += mse
-                num += 1
-            eval_mse = mse_sum / max(1, num)
+        # Eval
+        eval_mse = evaluate_epoch_mse(
+            model=model,
+            eval_loader=eval_loader,
+            device=device,
+            solver=solver,
+        )
         print(f"eval mse {eval_mse:.6f}")
 
         # Save checkpoint based on policy
