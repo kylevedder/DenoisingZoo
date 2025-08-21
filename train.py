@@ -19,8 +19,9 @@ from helpers import (
     build_model,
     build_optimizer,
     build_criterion,
-    save_checkpoint,
-    load_checkpoint,
+    get_checkpoint_path,
+    resume_if_requested,
+    save_if_needed,
 )
 
 
@@ -107,23 +108,15 @@ def train(cfg: DictConfig) -> None:
     criterion = build_criterion(cfg)
 
     # Resume from checkpoint if requested
-    start_epoch = 1
-    ckpt_dir: str = str(cfg.get("ckpt_dir", "outputs/ckpts"))
-    ckpt_name: str = str(cfg.get("ckpt_name", "last.pt"))
-    ckpt_path = f"{ckpt_dir}/{ckpt_name}"
-    if bool(cfg.get("resume", False)) and torch.cuda.is_available() is not None:
-        try:
-            last_epoch = load_checkpoint(
-                ckpt_path,
-                model=model,
-                optimizer=optimizer,
-                scaler=scaler,
-                map_location=device,
-            )
-            start_epoch = int(last_epoch) + 1
-            print(f"Resumed from {ckpt_path} at epoch {last_epoch}")
-        except FileNotFoundError:
-            print(f"No checkpoint found at {ckpt_path}; starting fresh")
+    ckpt_path = get_checkpoint_path(cfg)
+    start_epoch = resume_if_requested(
+        cfg=cfg,
+        ckpt_path=ckpt_path,
+        model=model,
+        optimizer=optimizer,
+        scaler=scaler,
+        device=device,
+    )
 
     epochs: int = int(cfg.get("epochs", 1))
     for epoch in range(start_epoch, epochs + 1):
@@ -138,18 +131,16 @@ def train(cfg: DictConfig) -> None:
         )
         print(f"epoch {epoch:04d} | loss {avg_loss:.6f}")
 
-        # Save checkpoint at the configured interval
-        save_every: int = int(cfg.get("save_every", 1))
-        if save_every > 0 and (epoch % save_every == 0 or epoch == epochs):
-            save_checkpoint(
-                path=ckpt_path,
-                model=model,
-                optimizer=optimizer,
-                scaler=scaler,
-                epoch=epoch,
-                cfg=cfg,
-            )
-            print(f"Saved checkpoint to {ckpt_path}")
+        # Save checkpoint based on policy
+        save_if_needed(
+            cfg=cfg,
+            ckpt_path=ckpt_path,
+            epoch=epoch,
+            epochs=epochs,
+            model=model,
+            optimizer=optimizer,
+            scaler=scaler,
+        )
 
 
 @hydra.main(config_path="configs", config_name="train", version_base=None)

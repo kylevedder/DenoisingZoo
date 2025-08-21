@@ -149,3 +149,72 @@ def load_checkpoint(
 
     # Return the epoch this checkpoint corresponds to
     return int(checkpoint.get("epoch", 0))
+
+
+# -----------------------------------------------------------------------------
+# Higher-level checkpoint orchestration helpers
+# -----------------------------------------------------------------------------
+
+
+def get_checkpoint_path(cfg: DictConfig) -> str:
+    """Build and ensure the checkpoint path based on config.
+
+    Returns the full path `<ckpt_dir>/<ckpt_name>` and creates the directory if
+    needed.
+    """
+    ckpt_dir: str = str(cfg.get("ckpt_dir", "outputs/ckpts"))
+    ckpt_name: str = str(cfg.get("ckpt_name", "last.pt"))
+    os.makedirs(ckpt_dir, exist_ok=True)
+    return f"{ckpt_dir}/{ckpt_name}"
+
+
+def resume_if_requested(
+    cfg: DictConfig,
+    ckpt_path: str,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scaler: torch.amp.GradScaler,
+    device: torch.device,
+) -> int:
+    """Resume training if `cfg.resume` is true.
+
+    Returns the starting epoch (1 if not resumed).
+    """
+    start_epoch = 1
+    if bool(cfg.get("resume", False)):
+        try:
+            last_epoch = load_checkpoint(
+                ckpt_path,
+                model=model,
+                optimizer=optimizer,
+                scaler=scaler,
+                map_location=device,
+            )
+            start_epoch = int(last_epoch) + 1
+            print(f"Resumed from {ckpt_path} at epoch {last_epoch}")
+        except FileNotFoundError:
+            print(f"No checkpoint found at {ckpt_path}; starting fresh")
+    return start_epoch
+
+
+def save_if_needed(
+    cfg: DictConfig,
+    ckpt_path: str,
+    epoch: int,
+    epochs: int,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scaler: torch.amp.GradScaler,
+) -> None:
+    """Save a checkpoint based on `save_every` policy and last-epoch condition."""
+    save_every: int = int(cfg.get("save_every", 1))
+    if save_every > 0 and (epoch % save_every == 0 or epoch == epochs):
+        save_checkpoint(
+            path=ckpt_path,
+            model=model,
+            optimizer=optimizer,
+            scaler=scaler,
+            epoch=epoch,
+            cfg=cfg,
+        )
+        print(f"Saved checkpoint to {ckpt_path}")

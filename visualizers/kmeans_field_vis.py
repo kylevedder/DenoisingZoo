@@ -65,6 +65,7 @@ def plot_flow(
     V: torch.Tensor,
     mag: torch.Tensor,
     out_path: str,
+    time_t: float,
 ) -> None:
     # Color encodes direction (angle), intensity encodes magnitude
     angle = torch.atan2(V, U)
@@ -78,8 +79,12 @@ def plot_flow(
     rgb = matplotlib.colors.hsv_to_rgb(hsv)
 
     fig, ax = plt.subplots(figsize=(6, 6), dpi=150)
-    ax.imshow(rgb, origin="lower", extent=[X.min(), X.max(), Y.min(), Y.max()])
-    ax.set_title("Learned flow field (hue=direction, value=magnitude)")
+    ax.imshow(
+        rgb,
+        origin="lower",
+        extent=[float(X.min()), float(X.max()), float(Y.min()), float(Y.max())],
+    )
+    ax.set_title(f"Learned flow field t={time_t:.02f} (hue=direction, value=magnitude)")
     ax.set_xlabel("x")
     ax.set_ylabel("y")
     ax.set_aspect("equal")
@@ -268,7 +273,7 @@ def main() -> None:
         )
         U, V, mag = stacked[0], stacked[1], stacked[2]
         flow_path = add_suffix(out_flow_base, f"t{tval:0.2f}")
-        plot_flow(X, Y, U, V, mag, flow_path)
+        plot_flow(X, Y, U, V, mag, flow_path, tval)
         print(f"Saved flow visualization to {flow_path}")
 
         if not truth_written:
