@@ -15,6 +15,8 @@ from helpers import (
     build_precision_settings,
     build_scaler,
     build_dataset,
+    build_dataset_from_config,
+    build_dataloader_from_config,
     build_dataloader,
     build_model,
     build_optimizer,
@@ -23,6 +25,7 @@ from helpers import (
     resume_if_requested,
     save_if_needed,
 )
+from hydra.utils import instantiate
 
 
 Batch = dict[str, torch.Tensor]
@@ -100,12 +103,15 @@ def train(cfg: DictConfig) -> None:
         print(f"sample tensor device: {sample.device}")
     scaler = build_scaler(settings)
 
-    dataset = build_dataset(cfg)
-    loader = build_dataloader(dataset, device, cfg)
+    # Build train/eval dataloaders from structured config
+    train_loader = build_dataloader_from_config(cfg.dataloaders.train, device)
+    eval_loader = build_dataloader_from_config(cfg.dataloaders.eval, device)
 
     model = build_model(cfg, device)
     optimizer = build_optimizer(cfg, model)
     criterion = build_criterion(cfg)
+    # Build solver
+    solver = instantiate(cfg.solver, model=model)
 
     # Resume from checkpoint if requested
     ckpt_path = get_checkpoint_path(cfg)
@@ -122,7 +128,7 @@ def train(cfg: DictConfig) -> None:
     for epoch in range(start_epoch, epochs + 1):
         avg_loss = train_one_epoch(
             model=model,
-            loader=loader,
+            loader=train_loader,
             optimizer=optimizer,
             criterion=criterion,
             device=device,
@@ -130,6 +136,22 @@ def train(cfg: DictConfig) -> None:
             scaler=scaler,
         )
         print(f"epoch {epoch:04d} | loss {avg_loss:.6f}")
+
+        # Eval: integrate ODE from source to time 1 and compare to target via MSE
+        model.eval()
+        with torch.no_grad():
+            mse_sum = 0.0
+            num = 0
+            for batch in eval_loader:
+                x0 = batch["input"].to(device)
+                y_true = batch["target"].to(device)
+                result = solver.solve(x0)
+                y_pred = result.final_state
+                mse = torch.mean((y_pred - y_true) ** 2).item()
+                mse_sum += mse
+                num += 1
+            eval_mse = mse_sum / max(1, num)
+        print(f"eval mse {eval_mse:.6f}")
 
         # Save checkpoint based on policy
         save_if_needed(

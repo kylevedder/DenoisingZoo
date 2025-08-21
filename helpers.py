@@ -60,6 +60,11 @@ def build_dataset(cfg: DictConfig) -> BaseDataset:
     return dataset
 
 
+def build_dataset_from_config(node: DictConfig) -> BaseDataset:
+    dataset: BaseDataset = instantiate(node)
+    return dataset
+
+
 def build_dataloader(
     dataset: BaseDataset, device: torch.device, cfg: DictConfig
 ) -> DataLoader:
@@ -69,6 +74,30 @@ def build_dataloader(
         "shuffle": cfg.get("shuffle", True),
         "num_workers": cfg.get("num_workers", 0),
         "drop_last": cfg.get("drop_last", False),
+    }
+    return DataLoader(adapter, **loader_kwargs)
+
+
+def build_dataloader_from_config(node: DictConfig, device: torch.device) -> DataLoader:
+    """Build a DataLoader from a structured config node containing a dataset.
+
+    Expected structure:
+      node:
+        dataset: <hydra target>
+        batch_size: int
+        shuffle: bool
+        num_workers: int
+        pin_memory: bool
+        drop_last: bool
+    """
+    dataset: BaseDataset = instantiate(node.dataset)
+    adapter = DictDatasetAdapter(dataset)
+    loader_kwargs: dict[str, Any] = {
+        "batch_size": node.get("batch_size", 256),
+        "shuffle": node.get("shuffle", True),
+        "num_workers": node.get("num_workers", 0),
+        "pin_memory": node.get("pin_memory", device.type == "cuda"),
+        "drop_last": node.get("drop_last", False),
     }
     return DataLoader(adapter, **loader_kwargs)
 
