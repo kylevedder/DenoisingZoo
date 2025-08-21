@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import os
+from pathlib import Path
 import math
 import argparse
 import numpy as np
@@ -12,50 +12,24 @@ import matplotlib
 # Use a non-interactive backend for headless saves
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes  # noqa: E402
 from omegaconf import OmegaConf  # noqa: E402
 
-from helpers import load_checkpoint
-from models.mlp import MLP
+from visualizers.common import (
+    get_device,
+    ensure_dir_for,
+    build_model_from_ckpt,
+    compute_flow_field,
+    flow_to_rgb,
+    add_direction_wheel_inset,
+)
 
 
-def build_model_from_ckpt(ckpt_path: str, device: torch.device) -> torch.nn.Module:
-    # Infer feature dim from training config; for this project it's 2
-    model = MLP(feature_dim=2, hidden_dim=256)
-    model.to(device)
-    # Load weights
-    load_checkpoint(
-        ckpt_path, model=model, optimizer=None, scaler=None, map_location=device
-    )
-    model.eval()
-    return model
+def _noop() -> None:
+    return None
 
 
-@torch.no_grad()
-def compute_flow_field(
-    model: torch.nn.Module,
-    device: torch.device,
-    grid_min: float = -4.0,
-    grid_max: float = 4.0,
-    num_points_per_dim: int = 200,
-    time_t: float = 0.5,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    xs = torch.linspace(grid_min, grid_max, num_points_per_dim, device=device)
-    ys = torch.linspace(grid_min, grid_max, num_points_per_dim, device=device)
-    X, Y = torch.meshgrid(xs, ys, indexing="xy")
-    pos = torch.stack([X, Y], dim=-1).reshape(-1, 2)
-    t = torch.full((pos.shape[0], 1), float(time_t), device=device)
-
-    # The learned vector field predicts the velocity (target - source)
-    vec = model(pos, t)
-    U = vec[:, 0].reshape(num_points_per_dim, num_points_per_dim)
-    V = vec[:, 1].reshape(num_points_per_dim, num_points_per_dim)
-    mag = torch.sqrt(U * U + V * V)
-    return (
-        X.detach().cpu(),
-        Y.detach().cpu(),
-        torch.stack([U, V, mag], dim=0).detach().cpu(),
-    )
+def _noop2() -> None:
+    return None
 
 
 def plot_flow(
@@ -67,16 +41,8 @@ def plot_flow(
     out_path: str,
     time_t: float,
 ) -> None:
-    # Color encodes direction (angle), intensity encodes magnitude
-    angle = torch.atan2(V, U)
-    # Normalize angle to [0, 1] for HSV
-    angle01 = (angle + math.pi) / (2 * math.pi)
-    # Normalize magnitude for brightness
-    mag_norm = mag / (mag.max() + 1e-12)
-
-    # Build HSV image: H=angle, S=1, V=mag_norm
-    hsv = torch.stack([angle01, torch.ones_like(angle01), mag_norm], dim=-1).numpy()
-    rgb = matplotlib.colors.hsv_to_rgb(hsv)
+    # Build RGB image from flow
+    rgb = flow_to_rgb(U, V, mag)
 
     fig, ax = plt.subplots(figsize=(6, 6), dpi=150)
     ax.imshow(
@@ -90,32 +56,9 @@ def plot_flow(
     ax.set_aspect("equal")
     ax.grid(False)
 
-    # Overlay a circular hue wheel to indicate direction mapping
-    Nw = 256
-    g = torch.linspace(-1.0, 1.0, Nw)
-    WX, WY = torch.meshgrid(g, g, indexing="xy")
-    R = torch.sqrt(WX * WX + WY * WY)
-    ANG = torch.atan2(WY, WX)
-    H = (ANG + math.pi) / (2 * math.pi)
-    S = torch.ones_like(H)
-    Vv = torch.ones_like(H)
-    HSV = torch.stack([H, S, Vv], dim=-1).numpy()
-    RGB = matplotlib.colors.hsv_to_rgb(HSV)
-    alpha = (R <= 1.0).to(torch.float32).numpy()
-    RGBA = np.dstack([RGB, alpha])
-
-    wheel_ax = inset_axes(
-        ax, width="22%", height="22%", loc="upper right", borderpad=0.8
-    )
-    wheel_ax.imshow(RGBA, origin="lower", extent=[-1, 1, -1, 1])
-    wheel_ax.set_title("Direction", fontsize=8)
-    wheel_ax.set_aspect("equal")
-    wheel_ax.set_xticks([])
-    wheel_ax.set_yticks([])
-    for spine in wheel_ax.spines.values():
-        spine.set_visible(False)
+    add_direction_wheel_inset(ax)
     fig.tight_layout()
-    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    ensure_dir_for(out_path)
     fig.savefig(out_path)
     plt.close(fig)
 
@@ -137,8 +80,10 @@ def _try_read_target_params_from_ckpt(
 
 def _fallback_read_target_params_from_yaml() -> tuple[np.ndarray, float]:
     cfg = OmegaConf.load("configs/train.yaml")
-    centroids = np.array(cfg.dataset.centroids)
-    target_std = float(cfg.dataset.target_std)
+    # Extract from the training dataloader dataset config
+    ds = cfg.dataloaders.train.dataset
+    centroids = np.array(ds.centroids)
+    target_std = float(ds.target_std)
     return centroids, target_std
 
 
@@ -218,19 +163,18 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Select device: prefer MPS, else CPU
-    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
-        device = torch.device("mps")
-    else:
-        device = torch.device("cpu")
+    # Select device
+    device = get_device()
 
     model = build_model_from_ckpt(args.ckpt, device)
 
     # Determine output paths
     if args.out is not None:
-        base, ext = os.path.splitext(args.out)
-        out_flow_base = f"{base}_flow{ext or '.png'}"
-        out_truth = f"{base}_truth{ext or '.png'}"
+        p = Path(args.out)
+        base = p.with_suffix("")
+        ext = p.suffix or ".png"
+        out_flow_base = str(base) + "_flow" + ext
+        out_truth = str(base) + "_truth" + ext
     else:
         out_flow_base = args.out_flow
         out_truth = args.out_truth
@@ -242,10 +186,9 @@ def main() -> None:
 
     # Helper to add suffix before extension
     def add_suffix(path: str, suffix: str) -> str:
-        b, e = os.path.splitext(path)
-        if not e:
-            e = ".png"
-        return f"{b}_{suffix}{e}"
+        p = Path(path)
+        e = p.suffix or ".png"
+        return str(p.with_suffix("").as_posix() + f"_{suffix}{e}")
 
     # Build list of t values (always a sequence)
     vals = []
@@ -263,7 +206,7 @@ def main() -> None:
     # Render flow for each t; render truth once
     truth_written = False
     for tval in t_values:
-        X, Y, stacked = compute_flow_field(
+        X, Y, U, V, mag = compute_flow_field(
             model=model,
             device=device,
             grid_min=args.min,
@@ -271,7 +214,6 @@ def main() -> None:
             num_points_per_dim=args.n,
             time_t=tval,
         )
-        U, V, mag = stacked[0], stacked[1], stacked[2]
         flow_path = add_suffix(out_flow_base, f"t{tval:0.2f}")
         plot_flow(X, Y, U, V, mag, flow_path, tval)
         print(f"Saved flow visualization to {flow_path}")

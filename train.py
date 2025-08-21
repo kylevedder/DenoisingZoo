@@ -25,6 +25,7 @@ from helpers import (
     resume_if_requested,
     save_if_needed,
     evaluate_epoch_mse,
+    load_checkpoint,
 )
 from hydra.utils import instantiate
 
@@ -113,6 +114,29 @@ def train(cfg: DictConfig) -> None:
     criterion = build_criterion(cfg)
     # Build solver
     solver = instantiate(cfg.solver, model=model)
+
+    # Eval-only mode: if eval_checkpoint is provided, evaluate that path
+    if (ckpt_override := cfg.get("eval_checkpoint", None)) is not None:
+        ckpt_path = str(ckpt_override)
+        try:
+            _ = load_checkpoint(
+                ckpt_path,
+                model=model,
+                optimizer=None,
+                scaler=None,
+                map_location=device,
+            )
+            print(f"Loaded checkpoint from {ckpt_path}")
+        except FileNotFoundError:
+            print(f"Checkpoint not found: {ckpt_path}")
+        eval_mse = evaluate_epoch_mse(
+            model=model,
+            eval_loader=eval_loader,
+            device=device,
+            solver=solver,
+        )
+        print(f"eval-only mse {eval_mse:.6f}")
+        return
 
     # Resume from checkpoint if requested
     ckpt_path = get_checkpoint_path(cfg)

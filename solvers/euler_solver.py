@@ -18,15 +18,14 @@ class EulerSolver(BaseSolver):
     def __init__(self, model: VectorFieldModel, num_steps: int = 10) -> None:
         super().__init__(model)
         self._num_steps = num_steps
+        if num_steps <= 0:
+            raise ValueError("num_steps must be positive")
 
     @torch.no_grad()
     def solve(
         self,
         initial_state: torch.Tensor,
     ) -> FlowSolveResult:
-        if self._num_steps <= 0:
-            raise ValueError("num_steps must be positive")
-
         x = initial_state
 
         dt = float(self._t_end - self._t_start) / float(self._num_steps)
