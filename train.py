@@ -24,7 +24,7 @@ from helpers import (
     get_checkpoint_path,
     resume_if_requested,
     save_if_needed,
-    evaluate_epoch_mse,
+    evaluate_epoch_energy_distance,
     load_checkpoint,
 )
 from hydra.utils import instantiate
@@ -129,13 +129,10 @@ def train(cfg: DictConfig) -> None:
             print(f"Loaded checkpoint from {ckpt_path}")
         except FileNotFoundError:
             print(f"Checkpoint not found: {ckpt_path}")
-        eval_mse = evaluate_epoch_mse(
-            model=model,
-            eval_loader=eval_loader,
-            device=device,
-            solver=solver,
+        ed = evaluate_epoch_energy_distance(
+            model=model, eval_loader=eval_loader, device=device, solver=solver
         )
-        print(f"eval-only mse {eval_mse:.6f}")
+        print(f"eval-only energy_distance {ed:.6f}")
         return
 
     # Resume from checkpoint if requested
@@ -162,14 +159,11 @@ def train(cfg: DictConfig) -> None:
         )
         print(f"epoch {epoch:04d} | loss {avg_loss:.6f}")
 
-        # Eval
-        eval_mse = evaluate_epoch_mse(
-            model=model,
-            eval_loader=eval_loader,
-            device=device,
-            solver=solver,
+        # Eval (distributional)
+        ed = evaluate_epoch_energy_distance(
+            model=model, eval_loader=eval_loader, device=device, solver=solver
         )
-        print(f"eval mse {eval_mse:.6f}")
+        print(f"eval energy_distance {ed:.6f}")
 
         # Save checkpoint based on policy
         save_if_needed(

@@ -11,6 +11,7 @@ from omegaconf import DictConfig
 from hydra.utils import instantiate
 
 from dataloaders.base_dataloaders import DictDatasetAdapter, BaseDataset
+from metal_fallbacks.pdist import pdist_compat
 
 
 @dataclass
@@ -250,31 +251,95 @@ def save_if_needed(
 
 
 # -----------------------------------------------------------------------------
-# Evaluation helpers
+# Distributional evaluation helpers (U-statistics)
 # -----------------------------------------------------------------------------
 
 
-def evaluate_epoch_mse(
+def compute_energy_distance_u_statistic(
+    x_samples: torch.Tensor,
+    y_samples: torch.Tensor,
+    p: float = 2.0,
+) -> float:
+    """Unbiased U-statistic estimator of the squared energy distance.
+
+    For distributions X and Y with samples x~X (n samples) and y~Y (m samples):
+        ED^2 = 2 E||x - y|| - E||x - x'|| - E||y - y'||
+
+    This function computes the unbiased U-statistic version using pairwise
+    distances. If n<2 or m<2, the corresponding intra-set term is treated as 0.
+
+    Args:
+        x_samples: Tensor of shape (n, d)
+        y_samples: Tensor of shape (m, d)
+        p: Norm degree for distances (passed to torch.cdist / torch.pdist). For
+           Euclidean distance use p=2.0.
+
+    Returns:
+        Scalar float: estimated ED^2 (non-negative, 0 iff identical distributions in the limit).
+    """
+    if x_samples.ndim != 2 or y_samples.ndim != 2:
+        raise ValueError(
+            "x_samples and y_samples must be rank-2 tensors (N, D) and (M, D)"
+        )
+
+    # Cross term
+    xy = torch.cdist(x_samples, y_samples, p=p)
+    mean_xy = (
+        xy.mean() if xy.numel() > 0 else torch.tensor(0.0, device=x_samples.device)
+    )
+
+    # Intra terms (use pairwise without diagonal via pdist)
+    if x_samples.shape[0] > 1:
+        xx = pdist_compat(x_samples, p=p)
+        mean_xx = xx.mean()
+    else:
+        mean_xx = torch.tensor(0.0, device=x_samples.device)
+
+    if y_samples.shape[0] > 1:
+        yy = pdist_compat(y_samples, p=p)
+        mean_yy = yy.mean()
+    else:
+        mean_yy = torch.tensor(0.0, device=y_samples.device)
+
+    ed2 = 2.0 * mean_xy - mean_xx - mean_yy
+    # Numerical safety: clamp at 0
+    return float(torch.clamp(ed2, min=0.0).item())
+
+
+def evaluate_epoch_energy_distance(
     model: torch.nn.Module,
     eval_loader: DataLoader,
     device: torch.device,
     solver: Any,
+    p: float = 2.0,
 ) -> float:
-    """Evaluate mean squared error over an eval loader using an ODE solver.
+    """Evaluate distributional error via energy distance U-statistic.
 
-    The solver is expected to expose a `solve(initial_state)` method returning an
-    object with a `final_state` tensor attribute.
+    Reconstructs source x and target y per batch using the dataset's provided
+    fields where:
+      x_t = (1 - t) * x + t * y
+      v   = y - x  (provided as `target` in batches)
+      => x = x_t - t * v,  y = x + v = x_t + (1 - t) * v
+
+    Then integrates from x (t=0) to obtain model samples and computes the
+    energy distance U-statistic between predicted samples and reconstructed y.
     """
     model.eval()
     with torch.no_grad():
-        mse_sum = 0.0
+        ed_sum = 0.0
         num = 0
         for batch in eval_loader:
-            x0: torch.Tensor = batch["input"].to(device)
-            y_true: torch.Tensor = batch["target"].to(device)
+            x_t: torch.Tensor = batch["input"].to(device)
+            t: torch.Tensor = batch["t"].to(device)
+            v: torch.Tensor = batch["target"].to(device)
+
+            x0 = x_t - t * v
+            y_true = x0 + v  # = x_t + (1 - t) * v
+
             result = solver.solve(x0)
-            y_pred: torch.Tensor = result.final_state
-            mse = torch.mean((y_pred - y_true) ** 2).item()
-            mse_sum += mse
+            y_pred = result.final_state
+
+            ed2 = compute_energy_distance_u_statistic(y_pred, y_true, p=p)
+            ed_sum += ed2
             num += 1
-        return mse_sum / max(1, num)
+        return ed_sum / max(1, num)

@@ -39,7 +39,7 @@ dataloaders:
         - [-2, 2]
         - [-2, -2]
         - [2, -2]
-      length: 5000
+      length: 10000
       source_std: 1.0
       target_std: 0.1
       seed: 420
