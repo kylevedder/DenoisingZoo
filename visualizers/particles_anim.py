@@ -16,6 +16,9 @@ from matplotlib.animation import FuncAnimation, PillowWriter  # noqa: E402
 
 from solvers.euler_solver import EulerSolver
 from visualizers.common import get_device, build_model_from_ckpt, ensure_dir_for
+from omegaconf import OmegaConf
+from hydra.utils import instantiate
+from helpers import build_dataloader_from_config
 
 
 def _noop() -> None:
@@ -100,21 +103,29 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--fps", type=int, default=20)
     parser.add_argument("--size", type=int, default=10, help="Marker size")
+    parser.add_argument(
+        "--cfg",
+        type=str,
+        default="configs/train.yaml",
+        help="Hydra config path to build model and dataloader",
+    )
     args = parser.parse_args()
 
     # Device selection
     device = get_device()
 
-    model = build_model_from_ckpt(args.ckpt, device)
+    model = build_model_from_ckpt(args.ckpt, device, cfg_path=args.cfg)
     solver = EulerSolver(model=model, num_steps=int(args.steps))
 
-    init_np = sample_initial_positions(
-        int(args.num),
-        (float(args.bounds[0]), float(args.bounds[1])),
-        mode=args.mode,
-        seed=int(args.seed),
-    )
-    init = torch.from_numpy(init_np).to(device=device, dtype=torch.float32)
+    # Build dataloader from config to draw a batch of source points (input at some t)
+    cfg = OmegaConf.load(args.cfg)
+    # Use train dataloader by default
+    loader = build_dataloader_from_config(cfg.dataloaders.train, device)
+    batch = next(iter(loader))
+    # Use the interpolated input as initial positions at varying t; alternatively, use raw_source if desired
+    init = batch["input"].to(device=device, dtype=torch.float32)
+    if init.shape[0] > int(args.num):
+        init = init[: int(args.num)]
 
     result = solver.solve(init)
     animate_particles(

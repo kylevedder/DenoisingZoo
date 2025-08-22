@@ -7,6 +7,8 @@ from typing import Tuple
 import torch
 import matplotlib
 import numpy as np
+from omegaconf import OmegaConf
+from hydra.utils import instantiate
 
 
 def get_device() -> torch.device:
@@ -21,12 +23,16 @@ def ensure_dir_for(path: str) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
 
 
-def build_model_from_ckpt(ckpt_path: str, device: torch.device) -> torch.nn.Module:
-    """Construct the default MLP(2->256) model and load weights from checkpoint."""
-    from models.mlp import MLP  # Local import to avoid circulars on import time
+def build_model_from_ckpt(
+    ckpt_path: str,
+    device: torch.device,
+    cfg_path: str = "configs/train.yaml",
+) -> torch.nn.Module:
+    """Instantiate model from Hydra config and load weights from checkpoint."""
     from helpers import load_checkpoint
 
-    model = MLP(feature_dim=2, hidden_dim=256)
+    cfg = OmegaConf.load(cfg_path)
+    model: torch.nn.Module = instantiate(cfg.model)
     model.to(device)
     load_checkpoint(
         ckpt_path, model=model, optimizer=None, scaler=None, map_location=device
