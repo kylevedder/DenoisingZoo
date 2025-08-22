@@ -1,18 +1,20 @@
 from __future__ import annotations
 
-from pathlib import Path
-import math
 import argparse
-import numpy as np
+from pathlib import Path
 
 import torch
 import matplotlib
 
-
-# Use a non-interactive backend for headless saves
+# Headless rendering (same as particles_anim)
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
-from omegaconf import OmegaConf  # noqa: E402
+from matplotlib.animation import (
+    FuncAnimation,
+    PillowWriter,
+    ImageMagickWriter,
+    FFMpegWriter,
+)  # noqa: E402
 
 from visualizers.common import (
     get_device,
@@ -21,107 +23,94 @@ from visualizers.common import (
     compute_flow_field,
     flow_to_rgb,
     add_direction_wheel_inset,
+    mp4_to_gif,
 )
 
 
-def _noop() -> None:
-    return None
-
-
-def _noop2() -> None:
-    return None
-
-
-def plot_flow(
-    X: torch.Tensor,
-    Y: torch.Tensor,
-    U: torch.Tensor,
-    V: torch.Tensor,
-    mag: torch.Tensor,
-    out_path: str,
-    time_t: float,
+def animate_flow(
+    model: torch.nn.Module,
+    device: torch.device,
+    t_values: list[float],
+    grid_min: float,
+    grid_max: float,
+    n: int,
+    out_gif: str,
+    fps: int = 20,
 ) -> None:
-    # Build RGB image from flow
-    rgb = flow_to_rgb(U, V, mag)
-
-    fig, ax = plt.subplots(figsize=(6, 6), dpi=150)
-    ax.imshow(
-        rgb,
-        origin="lower",
-        extent=[float(X.min()), float(X.max()), float(Y.min()), float(Y.max())],
+    # First frame to initialize canvas
+    X, Y, U, V, mag = compute_flow_field(
+        model=model,
+        device=device,
+        grid_min=grid_min,
+        grid_max=grid_max,
+        num_points_per_dim=n,
+        time_t=t_values[0],
     )
-    ax.set_title(f"Learned flow field t={time_t:.02f} (hue=direction, value=magnitude)")
-    ax.set_xlabel("x")
-    ax.set_ylabel("y")
-    ax.set_aspect("equal")
-    ax.grid(False)
+    rgb0 = flow_to_rgb(U, V, mag)
 
-    add_direction_wheel_inset(ax)
-    fig.tight_layout()
-    ensure_dir_for(out_path)
-    fig.savefig(out_path)
-    plt.close(fig)
-
-
-def _try_read_target_params_from_ckpt(
-    ckpt_path: str,
-) -> tuple[np.ndarray, float] | None:
-    try:
-        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-        cfg = ckpt.get("config", None)
-        if cfg is not None:
-            centroids = np.array(cfg["dataset"]["centroids"])  # type: ignore[index]
-            target_std = float(cfg["dataset"]["target_std"])  # type: ignore[index]
-            return centroids, target_std
-    except Exception:
-        pass
-    return None
-
-
-def _fallback_read_target_params_from_yaml() -> tuple[np.ndarray, float]:
-    cfg = OmegaConf.load("configs/train.yaml")
-    # Extract from the training dataloader dataset config
-    ds = cfg.dataloaders.train.dataset
-    centroids = np.array(ds.centroids)
-    target_std = float(ds.target_std)
-    return centroids, target_std
-
-
-def sample_target_distribution(
-    centroids: np.ndarray,
-    target_std: float,
-    num_samples: int,
-    rng: np.random.Generator | None = None,
-) -> np.ndarray:
-    rng = np.random.default_rng() if rng is None else rng
-    k = centroids.shape[0]
-    comp = rng.integers(0, k, size=(num_samples,))
-    means = centroids[comp]
-    samples = means + rng.normal(0.0, target_std, size=means.shape)
-    return samples
-
-
-def render_truth_density(
-    centroids: np.ndarray,
-    target_std: float,
-    bounds: tuple[float, float, float, float],
-    out_path: str,
-    num_samples: int = 50000,
-) -> None:
-    xmin, xmax, ymin, ymax = bounds
-    samples = sample_target_distribution(centroids, target_std, num_samples=num_samples)
-    x = samples[:, 0]
-    y = samples[:, 1]
     fig, ax = plt.subplots(figsize=(6, 6), dpi=150)
-    ax.hist2d(x, y, bins=200, range=[[xmin, xmax], [ymin, ymax]], cmap="Greys")
-    ax.set_title("True target distribution (density)")
+    im = ax.imshow(
+        rgb0,
+        origin="lower",
+        extent=(float(X.min()), float(X.max()), float(Y.min()), float(Y.max())),
+        interpolation="bicubic",
+    )
+    ax.set_title(
+        f"Learned flow field t={t_values[0]:.02f} (hue=direction, value=magnitude)"
+    )
     ax.set_xlabel("x")
     ax.set_ylabel("y")
     ax.set_aspect("equal")
     ax.grid(False)
-    fig.tight_layout()
-    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    fig.savefig(out_path)
+    add_direction_wheel_inset(ax)
+
+    def update(idx: int):
+        t = t_values[idx]
+        X, Y, U, V, mag = compute_flow_field(
+            model=model,
+            device=device,
+            grid_min=grid_min,
+            grid_max=grid_max,
+            num_points_per_dim=n,
+            time_t=t,
+        )
+        rgb = flow_to_rgb(U, V, mag)
+        im.set_data(rgb)
+        ax.set_title(f"Learned flow field t={t:.02f} (hue=direction, value=magnitude)")
+        return (im,)
+
+    anim = FuncAnimation(
+        fig, update, frames=len(t_values), interval=1000 / max(1, fps), blit=True
+    )
+    ensure_dir_for(out_gif)
+    # Prefer MP4 (H.264) for smooth gradients; fall back to high-quality GIF
+    if out_gif.lower().endswith(".mp4") and FFMpegWriter.isAvailable():
+        anim.save(
+            out_gif,
+            writer=FFMpegWriter(
+                fps=fps,
+                codec="libx264",
+                bitrate=8000,
+                extra_args=["-pix_fmt", "yuv420p", "-crf", "14", "-preset", "slow"],
+            ),
+        )
+    elif out_gif.lower().endswith(".gif") and ImageMagickWriter.isAvailable():
+        anim.save(
+            out_gif,
+            writer=ImageMagickWriter(
+                fps=fps,
+                extra_args=[
+                    "-dither",
+                    "FloydSteinberg",
+                    "-colors",
+                    "256",
+                    "-layers",
+                    "OptimizeTransparency",
+                ],
+            ),
+        )
+    else:
+        anim.save(out_gif, writer=PillowWriter(fps=fps))
     plt.close(fig)
 
 
@@ -131,97 +120,66 @@ def main() -> None:
         "--ckpt", type=str, default="outputs/ckpts/last.pt", help="Path to checkpoint"
     )
     parser.add_argument(
+        "--cfg",
+        type=str,
+        default="configs/train.yaml",
+        help="Hydra config path to build the model",
+    )
+    parser.add_argument(
         "--out",
         type=str,
-        default=None,
-        help="Deprecated: base output path; if provided, saves <base>_flow.png and <base>_truth.png",
-    )
-    parser.add_argument(
-        "--out_flow",
-        type=str,
-        default="outputs/vis/kmeans_flow.png",
-        help="Output path for flow visualization",
-    )
-    parser.add_argument(
-        "--out_truth",
-        type=str,
-        default="outputs/vis/kmeans_truth.png",
-        help="Output path for true target density",
+        default="outputs/vis/kmeans_flow.gif",
+        help="Output GIF path",
     )
     parser.add_argument("--min", type=float, default=-4.5)
     parser.add_argument("--max", type=float, default=4.5)
-    parser.add_argument("--n", type=int, default=500, help="Points per dimension")
-    # Time controls: render a sequence [t_start, t_end] with step
-    parser.add_argument(
-        "--t_start", type=float, default=0.0, help="Sequence start t (inclusive)"
-    )
-    parser.add_argument(
-        "--t_end", type=float, default=1.0, help="Sequence end t (inclusive)"
-    )
-    parser.add_argument(
-        "--t_step", type=float, default=0.05, help="Sequence step for t"
-    )
+    parser.add_argument("--n", type=int, default=500, help="Grid resolution per axis")
+    parser.add_argument("--fps", type=int, default=20)
+    # Time controls: sequence [t_start, t_end] with step
+    parser.add_argument("--t_start", type=float, default=0.0)
+    parser.add_argument("--t_end", type=float, default=1.0)
+    parser.add_argument("--t_step", type=float, default=0.05)
     args = parser.parse_args()
 
-    # Select device
     device = get_device()
+    model = build_model_from_ckpt(args.ckpt, device, cfg_path=args.cfg)
 
-    model = build_model_from_ckpt(args.ckpt, device)
-
-    # Determine output paths
-    if args.out is not None:
-        p = Path(args.out)
-        base = p.with_suffix("")
-        ext = p.suffix or ".png"
-        out_flow_base = str(base) + "_flow" + ext
-        out_truth = str(base) + "_truth" + ext
-    else:
-        out_flow_base = args.out_flow
-        out_truth = args.out_truth
-
-    params = _try_read_target_params_from_ckpt(args.ckpt)
-    if params is None:
-        params = _fallback_read_target_params_from_yaml()
-    centroids, target_std = params
-
-    # Helper to add suffix before extension
-    def add_suffix(path: str, suffix: str) -> str:
-        p = Path(path)
-        e = p.suffix or ".png"
-        return str(p.with_suffix("").as_posix() + f"_{suffix}{e}")
-
-    # Build list of t values (always a sequence)
-    vals = []
+    # Build list of t values (inclusive of end)
+    t_values: list[float] = []
     t = float(args.t_start)
     while t <= args.t_end + 1e-9:
-        vals.append(round(t, 4))
+        t_values.append(round(t, 4))
         t += float(args.t_step)
-    t_values = vals
 
-    # Precompute bounds from the grid (static across t)
-    xmin, xmax = float(args.min), float(args.max)
-    ymin, ymax = float(args.min), float(args.max)
-    bounds = (xmin, xmax, ymin, ymax)
-
-    # Render flow for each t; render truth once
-    truth_written = False
-    for tval in t_values:
-        X, Y, U, V, mag = compute_flow_field(
+    animate_flow(
+        model=model,
+        device=device,
+        t_values=t_values,
+        grid_min=float(args.min),
+        grid_max=float(args.max),
+        n=int(args.n),
+        out_gif=str(args.out),
+        fps=int(args.fps),
+    )
+    # Optional: if user asked for GIF but we generated MP4 for smoother colors
+    # allow user to specify a .gif path directly
+    if str(args.out).lower().endswith(".gif"):
+        mp4_path = str(Path(args.out).with_suffix(".mp4"))
+        # Render MP4 to avoid banding, then convert to high-quality GIF via ffmpeg
+        animate_flow(
             model=model,
             device=device,
-            grid_min=args.min,
-            grid_max=args.max,
-            num_points_per_dim=args.n,
-            time_t=tval,
+            t_values=t_values,
+            grid_min=float(args.min),
+            grid_max=float(args.max),
+            n=int(args.n),
+            out_gif=mp4_path,
+            fps=int(args.fps),
         )
-        flow_path = add_suffix(out_flow_base, f"t{tval:0.2f}")
-        plot_flow(X, Y, U, V, mag, flow_path, tval)
-        print(f"Saved flow visualization to {flow_path}")
-
-        if not truth_written:
-            render_truth_density(centroids, target_std, bounds, out_truth)
-            print(f"Saved true target density to {out_truth}")
-            truth_written = True
+        mp4_to_gif(mp4_path, str(args.out), fps=int(args.fps))
+        print(f"Saved flow animation GIF to {args.out}")
+    else:
+        print(f"Saved flow animation GIF to {args.out}")
 
 
 if __name__ == "__main__":

@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Tuple
 
 import torch
 import matplotlib
 import numpy as np
 from omegaconf import OmegaConf
 from hydra.utils import instantiate
+import shutil
+import subprocess
 
 
 def get_device() -> torch.device:
@@ -104,3 +105,55 @@ def add_direction_wheel_inset(
     wheel_ax.set_yticks([])
     for spine in wheel_ax.spines.values():
         spine.set_visible(False)
+
+
+def mp4_to_gif(mp4_path: str, gif_path: str, fps: int = 20) -> None:
+    """Convert an MP4 file to GIF using ffmpeg if available.
+
+    This yields higher quality (palette + dithering) than naïve per-frame GIFs.
+    Requires ffmpeg installed on the system.
+    """
+    ensure_dir_for(gif_path)
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError(
+            "ffmpeg not found on PATH; please install ffmpeg to enable MP4→GIF conversion"
+        )
+
+    palette_path = str(Path(gif_path).with_suffix(".palette.png"))
+    # Generate palette optimized for the clip
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            mp4_path,
+            "-vf",
+            f"fps={fps},scale=iw:ih:flags=lanczos,palettegen=stats_mode=full",
+            palette_path,
+        ],
+        check=True,
+    )
+    # Use palette with good dithering
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            mp4_path,
+            "-i",
+            palette_path,
+            "-lavfi",
+            f"fps={fps},scale=iw:ih:flags=lanczos,paletteuse=dither=sierra2_4a",
+            gif_path,
+        ],
+        check=True,
+    )
+    # Cleanup palette
+    try:
+        Path(palette_path).unlink(missing_ok=True)
+    except Exception:
+        pass

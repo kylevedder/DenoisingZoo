@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
-import math
 import argparse
-from typing import Tuple
-
-import numpy as np
 import torch
 import matplotlib
 
@@ -17,29 +12,7 @@ from matplotlib.animation import FuncAnimation, PillowWriter  # noqa: E402
 from solvers.euler_solver import EulerSolver
 from visualizers.common import get_device, build_model_from_ckpt, ensure_dir_for
 from omegaconf import OmegaConf
-from hydra.utils import instantiate
 from helpers import build_dataloader_from_config
-
-
-def _noop() -> None:
-    return None
-
-
-def sample_initial_positions(
-    num: int, bounds: tuple[float, float], mode: str = "random", seed: int = 0
-) -> np.ndarray:
-    minv, maxv = bounds
-    rng = np.random.default_rng(seed)
-    if mode == "grid":
-        side = int(math.ceil(math.sqrt(num)))
-        xs = np.linspace(minv, maxv, side)
-        ys = np.linspace(minv, maxv, side)
-        X, Y = np.meshgrid(xs, ys, indexing="xy")
-        pts = np.stack([X.ravel(), Y.ravel()], axis=1)
-        return pts[:num]
-    # default: random uniform
-    pts = rng.uniform(minv, maxv, size=(num, 2))
-    return pts
 
 
 def animate_particles(
@@ -83,24 +56,10 @@ def main() -> None:
         "--out", type=str, default="outputs/vis/particles.gif", help="Output gif path"
     )
     parser.add_argument("--num", type=int, default=200, help="Number of particles")
-    parser.add_argument(
-        "--bounds",
-        type=float,
-        nargs=2,
-        default=[-4.5, 4.5],
-        help="[min max] for init and view",
-    )
+    parser.add_argument("--bounds", type=float, nargs=2, default=[-4.5, 4.5])
     parser.add_argument(
         "--steps", type=int, default=50, help="Euler steps from t=0 to t=1"
     )
-    parser.add_argument(
-        "--mode",
-        type=str,
-        default="random",
-        choices=["random", "grid"],
-        help="Init particle layout",
-    )
-    parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--fps", type=int, default=20)
     parser.add_argument("--size", type=int, default=10, help="Marker size")
     parser.add_argument(
@@ -117,12 +76,10 @@ def main() -> None:
     model = build_model_from_ckpt(args.ckpt, device, cfg_path=args.cfg)
     solver = EulerSolver(model=model, num_steps=int(args.steps))
 
-    # Build dataloader from config to draw a batch of source points (input at some t)
+    # Build dataloader from config to draw a batch of positions
     cfg = OmegaConf.load(args.cfg)
-    # Use train dataloader by default
     loader = build_dataloader_from_config(cfg.dataloaders.train, device)
     batch = next(iter(loader))
-    # Use the interpolated input as initial positions at varying t; alternatively, use raw_source if desired
     init = batch["input"].to(device=device, dtype=torch.float32)
     if init.shape[0] > int(args.num):
         init = init[: int(args.num)]
