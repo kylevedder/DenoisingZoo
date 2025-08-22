@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import numpy as np
 import torch
 import matplotlib
 
@@ -21,20 +22,26 @@ def animate_particles(
     out_path: str,
     fps: int = 20,
     marker_size: int = 10,
+    times: list[float] | None = None,
 ) -> None:
     minv, maxv = bounds
     frames = [t.detach().cpu().numpy() for t in trajectory]
+    num_frames = len(frames)
+    if times is None or len(times) != num_frames:
+        times = np.linspace(0.0, 1.0, num_frames).tolist()
 
     fig, ax = plt.subplots(figsize=(6, 6), dpi=150)
     ax.set_xlim(minv, maxv)
     ax.set_ylim(minv, maxv)
     ax.set_aspect("equal")
-    ax.set_title("Particle flow animation")
+    t0 = float(times[0]) if times else 0.0
+    ax.set_title(f"Particle flow animation t={t0:.02f}")
     scat = ax.scatter(frames[0][:, 0], frames[0][:, 1], s=marker_size, c="tab:blue")
 
     def update(frame_idx: int):
         pts = frames[frame_idx]
         scat.set_offsets(pts)
+        ax.set_title(f"Particle flow animation t={float(times[frame_idx]):.02f}")
         return (scat,)
 
     anim = FuncAnimation(
@@ -91,6 +98,7 @@ def main() -> None:
         args.out,
         fps=int(args.fps),
         marker_size=int(args.size),
+        times=result.times,
     )
     print(f"Saved particle animation to {args.out}")
 

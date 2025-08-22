@@ -26,7 +26,7 @@ PYTHONPATH="$REPO_ROOT" python "$REPO_ROOT/visualizers/kmeans_field_vis.py" \
   --t_start 0.0 \
   --t_end 1.0 \
   --t_step 0.05 \
-  --fps 20
+  --fps 10
 
 # Also create a GIF (via high-quality MP4→GIF conversion inside the script)
 echo "[vis_all] Field flow (GIF) → $OUT_DIR/kmeans_flow.gif"
@@ -38,7 +38,7 @@ PYTHONPATH="$REPO_ROOT" python "$REPO_ROOT/visualizers/kmeans_field_vis.py" \
   --t_start 0.0 \
   --t_end 1.0 \
   --t_step 0.05 \
-  --fps 20
+  --fps 10
 
 echo "[vis_all] Particles → $OUT_DIR/particles.gif"
 PYTHONPATH="$REPO_ROOT" python "$REPO_ROOT/visualizers/kmeans_particles_vis.py" \
@@ -47,7 +47,7 @@ PYTHONPATH="$REPO_ROOT" python "$REPO_ROOT/visualizers/kmeans_particles_vis.py" 
   --num 200 \
   --bounds -4.5 4.5 \
   --steps 50 \
-  --fps 20 \
+  --fps 10 \
   --size 10 \
   --cfg "$CFG_PATH"
 
