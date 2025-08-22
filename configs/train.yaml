@@ -5,6 +5,13 @@ precision: fp32       # choices: fp32, bf16, fp16
 # Training
 epochs: 10
 
+# Shared dataset parameters
+centroids:
+  - [2, 2]
+  - [-2, 2]
+  - [-2, -2]
+  - [2, -2]
+
 # Checkpointing
 ckpt_dir: outputs/ckpts
 ckpt_name: last.pt
@@ -17,11 +24,7 @@ dataloaders:
   train:
     dataset:
       _target_: dataloaders.kmeans_dataset.GaussianKMeansDataset
-      centroids:
-        - [2, 2]
-        - [-2, 2]
-        - [-2, -2]
-        - [2, -2]
+      centroids: ${centroids}
       length: 200000
       source_std: 1.0
       target_std: 0.1
@@ -34,11 +37,7 @@ dataloaders:
   eval:
     dataset:
       _target_: dataloaders.kmeans_dataset.GaussianKMeansDataset
-      centroids:
-        - [2, 2]
-        - [-2, 2]
-        - [-2, -2]
-        - [2, -2]
+      centroids: ${centroids}
       length: 10000
       source_std: 1.0
       target_std: 0.1
