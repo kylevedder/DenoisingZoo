@@ -1,0 +1,35 @@
+
+# Shared dataset parameters
+centroids:
+  - [2, 2]
+  - [-2, 2]
+  - [-2, -2]
+  - [2, -2]
+train:
+  dataset:
+    _target_: dataloaders.kmeans_dataset.GaussianKMeansDataset
+    centroids: ${centroids}
+    length: 200000
+    source_std: 1.0
+    target_std: 0.1
+    seed: 69
+  batch_size: 1024
+  shuffle: true
+  num_workers: 0
+  pin_memory: true
+  drop_last: false
+eval:
+  dataset:
+    _target_: dataloaders.kmeans_dataset.GaussianKMeansDataset
+    centroids: ${centroids}
+    length: 10000
+    source_std: 1.0
+    target_std: 0.1
+    seed: 420
+  batch_size: 1024
+  shuffle: false
+  num_workers: 0
+  pin_memory: true
+  drop_last: false
+
+

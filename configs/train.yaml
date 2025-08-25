@@ -1,3 +1,9 @@
+# Defaults
+defaults:
+  - dataloaders: kmeans
+  - model: mlp
+  - _self_
+
 # Device and precision
 device: mps          # choices: cpu, cuda, mps (on Apple)
 precision: fp32       # choices: fp32, bf16, fp16
@@ -5,54 +11,12 @@ precision: fp32       # choices: fp32, bf16, fp16
 # Training
 epochs: 10
 
-# Shared dataset parameters
-centroids:
-  - [2, 2]
-  - [-2, 2]
-  - [-2, -2]
-  - [2, -2]
-
 # Checkpointing
 ckpt_dir: outputs/ckpts
 ckpt_name: last.pt
 resume: false
 save_every: 1   # save every N epochs
 eval_checkpoint: null
-
-# Dataloaders
-dataloaders:
-  train:
-    dataset:
-      _target_: dataloaders.kmeans_dataset.GaussianKMeansDataset
-      centroids: ${centroids}
-      length: 200000
-      source_std: 1.0
-      target_std: 0.1
-      seed: 69
-    batch_size: 1024
-    shuffle: true
-    num_workers: 0
-    pin_memory: true
-    drop_last: false
-  eval:
-    dataset:
-      _target_: dataloaders.kmeans_dataset.GaussianKMeansDataset
-      centroids: ${centroids}
-      length: 10000
-      source_std: 1.0
-      target_std: 0.1
-      seed: 420
-    batch_size: 1024
-    shuffle: false
-    num_workers: 0
-    pin_memory: true
-    drop_last: false
-
-# Model (Hydra-instantiable)
-model:
-  _target_: models.mlp.MLP
-  feature_dim: 2
-  hidden_dim: 256
 
 # Optimizer (Hydra-instantiable)
 optimizer:

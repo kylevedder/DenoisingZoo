@@ -46,5 +46,23 @@ if [[ "${MPS_OR_CPU}" != "mps" ]]; then
 fi
 echo "[train.sh] selected device: ${DEVICE_ARG#device=}"
 
-# Run training (pass through any extra CLI args after this script)
-python train.py "${DEVICE_ARG}" "$@"
+# Allow selecting dataloader group via DATALOADERS env if not explicitly provided
+HAS_CLI_DL_OVERRIDE=false
+for arg in "$@"; do
+  if [[ "$arg" == dataloaders=* ]]; then
+    HAS_CLI_DL_OVERRIDE=true
+    break
+  fi
+done
+
+EXTRA_ARGS=""
+if [[ "$HAS_CLI_DL_OVERRIDE" = false && -n "${DATALOADERS:-}" ]]; then
+  EXTRA_ARGS="dataloaders=${DATALOADERS}"
+fi
+
+# Run training (pass through CLI args)
+if [[ -n "$EXTRA_ARGS" ]]; then
+  python train.py "${DEVICE_ARG}" "$EXTRA_ARGS" "$@"
+else
+  python train.py "${DEVICE_ARG}" "$@"
+fi

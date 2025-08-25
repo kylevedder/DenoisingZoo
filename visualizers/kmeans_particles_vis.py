@@ -11,6 +11,8 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.animation import FuncAnimation, PillowWriter  # noqa: E402
 
 from solvers.euler_solver import EulerSolver
+from solvers.rk4_solver import RK4Solver
+from solvers.base_solver import BaseSolver
 from visualizers.common import get_device, build_model_from_ckpt, ensure_dir_for
 from omegaconf import OmegaConf
 from helpers import build_dataloader_from_config
@@ -28,20 +30,22 @@ def animate_particles(
     frames = [t.detach().cpu().numpy() for t in trajectory]
     num_frames = len(frames)
     if times is None or len(times) != num_frames:
-        times = np.linspace(0.0, 1.0, num_frames).tolist()
+        times_list: list[float] = np.linspace(0.0, 1.0, num_frames).tolist()
+    else:
+        times_list = times
 
     fig, ax = plt.subplots(figsize=(6, 6), dpi=150)
     ax.set_xlim(minv, maxv)
     ax.set_ylim(minv, maxv)
     ax.set_aspect("equal")
-    t0 = float(times[0]) if times else 0.0
+    t0 = float(times_list[0]) if times_list else 0.0
     ax.set_title(f"Particle flow animation t={t0:.02f}")
     scat = ax.scatter(frames[0][:, 0], frames[0][:, 1], s=marker_size, c="tab:blue")
 
     def update(frame_idx: int):
         pts = frames[frame_idx]
         scat.set_offsets(pts)
-        ax.set_title(f"Particle flow animation t={float(times[frame_idx]):.02f}")
+        ax.set_title(f"Particle flow animation t={float(times_list[frame_idx]):.02f}")
         return (scat,)
 
     anim = FuncAnimation(
@@ -75,13 +79,24 @@ def main() -> None:
         default="configs/train.yaml",
         help="Hydra config path to build model and dataloader",
     )
+    parser.add_argument(
+        "--solver",
+        type=str,
+        choices=["euler", "rk4"],
+        default="euler",
+        help="Which ODE solver to use for integration",
+    )
     args = parser.parse_args()
 
     # Device selection
     device = get_device()
 
     model = build_model_from_ckpt(args.ckpt, device, cfg_path=args.cfg)
-    solver = EulerSolver(model=model, num_steps=int(args.steps))
+    solver: BaseSolver
+    if args.solver == "euler":
+        solver = EulerSolver(model=model, num_steps=int(args.steps))
+    else:
+        solver = RK4Solver(model=model, num_steps=int(args.steps))
 
     # Build dataloader from config to draw a batch of positions
     cfg = OmegaConf.load(args.cfg)
