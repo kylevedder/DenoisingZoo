@@ -32,7 +32,15 @@ def build_model_from_ckpt(
     """Instantiate model from Hydra config and load weights from checkpoint."""
     from helpers import load_checkpoint
 
-    cfg = OmegaConf.load(cfg_path)
+    # Prefer the composed config saved inside the checkpoint (contains resolved groups)
+    ckpt_blob = torch.load(ckpt_path, map_location=device, weights_only=False)
+    if not (isinstance(ckpt_blob, dict) and "config" in ckpt_blob):
+        raise RuntimeError(
+            "Checkpoint is missing a resolved 'config'. Re-train to create a compatible checkpoint."
+        )
+    # Convert plain container back to OmegaConf for instantiate
+    cfg = OmegaConf.create(ckpt_blob["config"])  # type: ignore[arg-type]
+
     model: torch.nn.Module = instantiate(cfg.model)
     model.to(device)
     load_checkpoint(
@@ -82,7 +90,7 @@ def flow_to_rgb(U: torch.Tensor, V: torch.Tensor, mag: torch.Tensor) -> np.ndarr
 def add_direction_wheel_inset(
     ax, size_pct: str = "22%", loc: str = "upper right"
 ) -> None:
-    from mpl_toolkits.axes_grid1.inset_locator import inset_axes  # lazy import
+    from mpl_toolkits.axes_grid1.inset_locator import inset_axes  # type: ignore[import]
 
     Nw = 256
     g = torch.linspace(-1.0, 1.0, Nw)

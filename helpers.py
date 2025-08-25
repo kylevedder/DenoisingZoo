@@ -7,7 +7,7 @@ import os
 import torch
 from torch.utils.data import DataLoader
 
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from hydra.utils import instantiate
 
 from dataloaders.base_dataloaders import DictDatasetAdapter, BaseDataset
@@ -142,7 +142,8 @@ def save_checkpoint(
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict(),
         "scaler": scaler.state_dict() if scaler is not None else None,
-        "config": cfg,
+        # Store a fully resolved, plain config for robust loading outside Hydra
+        "config": OmegaConf.to_container(cfg, resolve=True),
         "torch_version": torch.__version__,
     }
     torch.save(state, path)

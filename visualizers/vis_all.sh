@@ -49,6 +49,19 @@ PYTHONPATH="$REPO_ROOT" python "$REPO_ROOT/visualizers/kmeans_particles_vis.py" 
   --steps 50 \
   --fps 10 \
   --size 10 \
+  --solver euler \
+  --cfg "$CFG_PATH"
+
+echo "[vis_all] Particles (RK4) → $OUT_DIR/particles_rk4.gif"
+PYTHONPATH="$REPO_ROOT" python "$REPO_ROOT/visualizers/kmeans_particles_vis.py" \
+  --ckpt "$CKPT_PATH" \
+  --out "$OUT_DIR/particles_rk4.gif" \
+  --num 200 \
+  --bounds -4.5 4.5 \
+  --steps 50 \
+  --fps 10 \
+  --size 10 \
+  --solver rk4 \
   --cfg "$CFG_PATH"
 
 echo "[vis_all] Done"

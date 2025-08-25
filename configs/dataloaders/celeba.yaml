@@ -1,0 +1,32 @@
+train:
+  dataset:
+    _target_: dataloaders.celeba_dataset.CelebADataset
+    root: data/celeba
+    split: train
+    image_size: 128
+    download: true
+    to_grayscale: false
+    normalize: true
+    seed: 42
+  batch_size: 64
+  shuffle: true
+  num_workers: 4
+  pin_memory: true
+  drop_last: false
+eval:
+  dataset:
+    _target_: dataloaders.celeba_dataset.CelebADataset
+    root: data/celeba
+    split: valid
+    image_size: 128
+    download: false
+    to_grayscale: false
+    normalize: true
+    seed: 1337
+  batch_size: 64
+  shuffle: false
+  num_workers: 4
+  pin_memory: true
+  drop_last: false
+
+

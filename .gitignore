@@ -50,6 +50,7 @@ logs/
 # Hydra outputs and generated artifacts
 outputs/
 multirun/
+data/
 **/outputs/vis/*.png
 **/outputs/vis/*.gif
 **/outputs/ckpts/*.pt
