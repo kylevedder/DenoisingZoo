@@ -4,122 +4,89 @@ Modal application for remote training on NVIDIA GPUs.
 
 import os
 import sys
-from pathlib import Path
-from typing import List
-
+import subprocess
 import modal
 
 
-# Create a Modal stub for the training application
-stub = modal.Stub("denoisingzoo-training")
+# Enable Modal client output early so image build logs are streamed locally
+modal.enable_output()
+
+app = modal.App("denoisingzoo-training")
 
 
-@stub.function(
-    image=modal.Image.debian_slim(python_version="3.12")
+image = (
+    modal.Image.debian_slim(python_version="3.12")
+    # Build steps first
+    .run_commands("python -m pip install --upgrade pip")
     .pip_install(
-        "torch==2.8.0",
-        "hydra-core>=1.3,<2.0", 
+        # Install non-Torch deps at build time
+        "hydra-core>=1.3,<2.0",
         "omegaconf>=2.3,<3.0",
         "numpy>=1.26",
         "tqdm>=4.66",
         "matplotlib>=3.8",
     )
     .run_commands(
-        "mkdir -p /root/.cache/torch/hub/checkpoints",
-    ),
-    gpu=modal.gpu.A100(),  # Use A100 GPU
-    timeout=3600,  # 1 hour timeout
-    secrets=[
-        modal.Secret.from_name("modal-training-secrets")  # For any API keys or secrets
-    ],
-    volumes={
-        "/data": modal.Volume.from_name("training-data"),  # Persistent storage for checkpoints
-    }
+        # Install CUDA-enabled torch/vision versions available on cu124 index
+        "pip install --index-url https://download.pytorch.org/whl/cu124 'torch>=2.6,<2.7' 'torchvision>=0.21,<0.22'"
+    )
+    .run_commands("mkdir -p /root/.cache/torch/hub/checkpoints")
+    # Then add local sources last so no build steps follow (faster dev loop)
+    .add_local_dir("configs", "/root/app/configs", copy=True)
+    .add_local_dir("models", "/root/app/models", copy=True)
+    .add_local_dir("dataloaders", "/root/app/dataloaders", copy=True)
+    .add_local_dir("metal_fallbacks", "/root/app/metal_fallbacks", copy=True)
+    .add_local_dir("solvers", "/root/app/solvers", copy=True)
+    .add_local_dir("visualizers", "/root/app/visualizers", copy=True)
+    .add_local_file("train.py", "/root/app/train.py", copy=True)
+    .add_local_file("helpers.py", "/root/app/helpers.py", copy=True)
+    .add_local_file("pyproject.toml", "/root/app/pyproject.toml", copy=True)
 )
-def train_on_modal(extra_args: List[str]) -> None:
+
+
+@app.function(
+    image=image,
+    gpu="A100-40GB",
+    timeout=3600,
+)
+def train_on_modal(extra_args: list[str]) -> None:
     """Run training on Modal with NVIDIA GPU."""
-    import torch
-    import subprocess
-    import sys
-    
-    # Set device to CUDA
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-    
+    # Workdir contains our code baked into the image
+    os.chdir("/root/app")
+
     # Verify GPU availability
+    import torch
+
     print(f"PyTorch version: {torch.__version__}")
     print(f"CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
         print(f"CUDA device count: {torch.cuda.device_count()}")
         print(f"Current device: {torch.cuda.current_device()}")
         print(f"Device name: {torch.cuda.get_device_name()}")
-    
-    # Copy local files to Modal
-    local_files = [
-        "train.py",
-        "helpers.py", 
-        "pyproject.toml",
-        "configs/",
-        "models/",
-        "dataloaders/",
-        "solvers/",
-    ]
-    
-    for file_path in local_files:
-        if os.path.exists(file_path):
-            if os.path.isdir(file_path):
-                subprocess.run(["cp", "-r", file_path, "/root/"], check=True)
-            else:
-                subprocess.run(["cp", file_path, "/root/"], check=True)
-    
-    # Change to root directory where files were copied
-    os.chdir("/root")
-    
-    # Create outputs directory
+
     os.makedirs("outputs/ckpts", exist_ok=True)
-    
-    # Run training with CUDA device
-    cmd = ["python", "train.py", "device=cuda"] + extra_args
-    print(f"Running command: {' '.join(cmd)}")
-    
-    try:
-        subprocess.run(cmd, check=True)
-        
-        # Copy results back to persistent volume
-        if os.path.exists("outputs"):
-            subprocess.run(["cp", "-r", "outputs", "/data/"], check=True)
-            print("Training results saved to persistent volume")
-            
-    except subprocess.CalledProcessError as e:
-        print(f"Training failed with exit code: {e.returncode}")
-        raise
+
+    cmd = ["python", "train.py", "device=cuda", *extra_args]
+    print("Running command:", " ".join(cmd))
+    subprocess.run(cmd, check=True)
 
 
-@stub.local_entrypoint()
-def main(extra_args: List[str] = None):
-    """Main entrypoint for Modal training."""
-    if extra_args is None:
-        extra_args = []
-    
+def run_modal_training(extra_args: list[str]) -> None:
+    """Helper function to run Modal training from launcher.py."""
+    # Rely on Modal's default auth (e.g., ~/.modal.toml). If missing, Modal will prompt.
     print("Starting Modal training job...")
-    train_on_modal.remote(extra_args)
+    with app.run():
+        # Call remote; logs will stream because modal.enable_output() is enabled
+        train_on_modal.remote(extra_args)
     print("Modal training job completed!")
 
 
-def run_modal_training(extra_args: List[str]) -> None:
-    """Helper function to run Modal training from launcher.py."""
-    # Set up Modal token if not already set
-    if not os.getenv("MODAL_TOKEN_ID") and not os.getenv("MODAL_TOKEN_SECRET"):
-        print("Modal credentials not found. Please set up Modal authentication:")
-        print("1. Run: modal token new")
-        print("2. Or set MODAL_TOKEN_ID and MODAL_TOKEN_SECRET environment variables")
-        sys.exit(1)
-    
-    # Run the Modal app
-    with stub.run():
-        main(extra_args)
-
-
 if __name__ == "__main__":
-    # Allow running directly: python modal_app.py [extra_args...]
     extra_args = sys.argv[1:] if len(sys.argv) > 1 else []
     run_modal_training(extra_args)
+
+
+@app.local_entrypoint()
+def main(*extra_args: str) -> None:
+    """CLI entrypoint so `modal run scripts/modal_app.py -- ...` streams logs."""
+    train_on_modal.remote(list(extra_args))
