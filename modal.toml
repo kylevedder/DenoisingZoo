@@ -1,0 +1,22 @@
+[stub.denoisingzoo-training]
+# Modal configuration for denoisingzoo training
+
+# GPU configuration
+gpu = "A100"
+
+# Timeout in seconds (1 hour)
+timeout = 3600
+
+# Memory limit (16GB)
+memory = 16384
+
+# CPU cores
+cpu = 4
+
+# Secrets configuration
+[stub.denoisingzoo-training.secrets]
+modal-training-secrets = "modal-training-secrets"
+
+# Volume configuration  
+[stub.denoisingzoo-training.volumes]
+training-data = "training-data"
