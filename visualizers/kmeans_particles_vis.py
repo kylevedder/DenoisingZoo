@@ -98,9 +98,14 @@ def main() -> None:
     else:
         solver = RK4Solver(model=model, num_steps=int(args.steps))
 
-    # Build dataloader from config to draw a batch of positions
-    cfg = OmegaConf.load(args.cfg)
-    loader = build_dataloader_from_config(cfg.dataloaders.train, device)
+    # Build dataloader strictly from checkpoint's resolved config
+    ckpt_blob = torch.load(args.ckpt, map_location="cpu", weights_only=False)
+    if not (isinstance(ckpt_blob, dict) and "config" in ckpt_blob):
+        raise RuntimeError(
+            "Checkpoint is missing a resolved 'config'. Re-train to create a compatible checkpoint."
+        )
+    cfg_ckpt = OmegaConf.create(ckpt_blob["config"])  # type: ignore[arg-type]
+    loader = build_dataloader_from_config(cfg_ckpt.dataloaders.train, device)
     batch = next(iter(loader))
     init = batch["input"].to(device=device, dtype=torch.float32)
     if init.shape[0] > int(args.num):
