@@ -22,10 +22,10 @@ PYTHONPATH="$REPO_ROOT" python "$REPO_ROOT/visualizers/kmeans_field_vis.py" \
   --ckpt "$CKPT_PATH" \
   --cfg "$CFG_PATH" \
   --out "$OUT_DIR/kmeans_flow.mp4" \
-  --n 120 \
+  --n 200 \
   --t_start 0.0 \
   --t_end 1.0 \
-  --t_step 0.05 \
+  --t_step 0.02 \
   --fps 10
 
 # Also create a GIF (via high-quality MP4→GIF conversion inside the script)
@@ -34,10 +34,10 @@ PYTHONPATH="$REPO_ROOT" python "$REPO_ROOT/visualizers/kmeans_field_vis.py" \
   --ckpt "$CKPT_PATH" \
   --cfg "$CFG_PATH" \
   --out "$OUT_DIR/kmeans_flow.gif" \
-  --n 120 \
+  --n 200 \
   --t_start 0.0 \
   --t_end 1.0 \
-  --t_step 0.05 \
+  --t_step 0.02 \
   --fps 10
 
 echo "[vis_all] Particles → $OUT_DIR/particles.gif"
@@ -50,6 +50,7 @@ PYTHONPATH="$REPO_ROOT" python "$REPO_ROOT/visualizers/kmeans_particles_vis.py" 
   --fps 10 \
   --size 10 \
   --solver euler \
+  --title-solver \
   --cfg "$CFG_PATH"
 
 echo "[vis_all] Particles (RK4) → $OUT_DIR/particles_rk4.gif"
@@ -62,6 +63,20 @@ PYTHONPATH="$REPO_ROOT" python "$REPO_ROOT/visualizers/kmeans_particles_vis.py" 
   --fps 10 \
   --size 10 \
   --solver rk4 \
+  --title-solver \
+  --cfg "$CFG_PATH"
+
+  # Faster particles
+  echo "[vis_all] Particles → $OUT_DIR/particles_fast.gif"
+PYTHONPATH="$REPO_ROOT" python "$REPO_ROOT/visualizers/kmeans_particles_vis.py" \
+  --ckpt "$CKPT_PATH" \
+  --out "$OUT_DIR/particles_fast.gif" \
+  --num 200 \
+  --bounds -4.5 4.5 \
+  --steps 30 \
+  --fps 20 \
+  --size 10 \
+  --solver euler \
   --cfg "$CFG_PATH"
 
 echo "[vis_all] Done"

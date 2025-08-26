@@ -25,6 +25,7 @@ image = (
         "numpy>=1.26",
         "tqdm>=4.66",
         "matplotlib>=3.8",
+        "gdown>=5.2",
     )
     .run_commands(
         # Install CUDA-enabled torch/vision versions available on cu124 index
@@ -48,6 +49,7 @@ image = (
     image=image,
     gpu="A100-40GB",
     timeout=3600,
+    volumes={"/data": modal.Volume.from_name("training-data")},
 )
 def train_on_modal(extra_args: list[str]) -> None:
     """Run training on Modal with NVIDIA GPU."""
@@ -66,7 +68,18 @@ def train_on_modal(extra_args: list[str]) -> None:
 
     os.makedirs("outputs/ckpts", exist_ok=True)
 
-    cmd = ["python", "train.py", "device=cuda", *extra_args]
+    # Ensure dataset roots use the persisted volume unless explicitly overridden
+    args = list(extra_args)
+
+    def _has_prefix(prefix: str) -> bool:
+        return any(str(a).startswith(prefix) for a in args)
+
+    if not _has_prefix("dataloaders.train.dataset.root="):
+        args.append("dataloaders.train.dataset.root=/data/celeba")
+    if not _has_prefix("dataloaders.eval.dataset.root="):
+        args.append("dataloaders.eval.dataset.root=/data/celeba")
+
+    cmd = ["python", "train.py", "device=cuda", *args]
     print("Running command:", " ".join(cmd))
     subprocess.run(cmd, check=True)
 

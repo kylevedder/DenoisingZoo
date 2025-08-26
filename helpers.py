@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 import os
+from tqdm import tqdm
 
 import torch
 from torch.utils.data import DataLoader
@@ -59,6 +60,39 @@ def build_scaler(settings: PrecisionSettings) -> torch.amp.GradScaler:
 def build_dataset(cfg: DictConfig) -> BaseDataset:
     dataset: BaseDataset = instantiate(cfg.dataset)
     return dataset
+
+
+# -----------------------------------------------------------------------------
+# Tensor helpers
+# -----------------------------------------------------------------------------
+
+
+def broadcast_batch_scalar_to(t: torch.Tensor, like: torch.Tensor) -> torch.Tensor:
+    """Broadcast a batch-wise scalar time tensor `t` to match `like`'s shape.
+
+    Assumes first dimension is batch. Supports `t` shaped (B,) or (B, 1, ..., 1).
+    Returns a view suitable for elementwise ops with `like` (no materialized expand).
+    """
+    if t.shape[0] != like.shape[0]:
+        raise ValueError(
+            f"Batch size mismatch between t ({t.shape[0]}) and like ({like.shape[0]})"
+        )
+    # Reduce t to (B,) then reshape to (B, 1, ..., 1)
+    t_batch = t.reshape(t.shape[0], -1)[:, :1]
+    target_shape = (t.shape[0], *([1] * (like.ndim - 1)))
+    t_view = t_batch.reshape(*target_shape)
+    return t_view.to(dtype=like.dtype, device=like.device)
+
+
+def reshape_to_samples_2d(x: torch.Tensor) -> torch.Tensor:
+    """Return x as (N, D) by flattening all non-batch dims.
+
+    Assumes first dimension is batch. If x is already (N, D) it is returned
+    as-is. For (N, C, H, W, ...) returns (N, C*H*W*...).
+    """
+    if x.ndim == 2:
+        return x
+    return x.reshape(x.shape[0], -1)
 
 
 def build_dataset_from_config(node: DictConfig) -> BaseDataset:
@@ -329,18 +363,24 @@ def evaluate_epoch_energy_distance(
     with torch.no_grad():
         ed_sum = 0.0
         num = 0
-        for batch in eval_loader:
+        for batch in tqdm(eval_loader, desc="Evaluating energy distance"):
             x_t: torch.Tensor = batch["input"].to(device)
             t: torch.Tensor = batch["t"].to(device)
             v: torch.Tensor = batch["target"].to(device)
 
-            x0 = x_t - t * v
+            t_b = broadcast_batch_scalar_to(t, x_t)
+
+            x0 = x_t - t_b * v
             y_true = x0 + v  # = x_t + (1 - t) * v
 
             result = solver.solve(x0)
             y_pred = result.final_state
 
-            ed2 = compute_energy_distance_u_statistic(y_pred, y_true, p=p)
+            # Flatten to (N, D) for distance computation
+            y_pred_2d = reshape_to_samples_2d(y_pred)
+            y_true_2d = reshape_to_samples_2d(y_true)
+
+            ed2 = compute_energy_distance_u_statistic(y_pred_2d, y_true_2d, p=p)
             ed_sum += ed2
             num += 1
         return ed_sum / max(1, num)

@@ -8,6 +8,7 @@ train:
     to_grayscale: false
     normalize: true
     seed: 42
+    subset_length: 1000
   batch_size: 64
   shuffle: true
   num_workers: 4

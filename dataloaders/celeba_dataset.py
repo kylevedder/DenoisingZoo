@@ -5,6 +5,7 @@ from pathlib import Path
 
 import torch
 from torchvision import datasets, transforms  # type: ignore[import]
+from torch.utils.data import Subset
 
 from dataloaders.base_dataloaders import BaseDataset, BaseItem
 
@@ -42,6 +43,7 @@ class CelebADataset(BaseDataset):
         to_grayscale: bool = False,
         normalize: bool = True,
         seed: int = 42,
+        subset_length: int | None = None,
     ) -> None:
         self._root = Path(root)
 
@@ -73,6 +75,10 @@ class CelebADataset(BaseDataset):
         self._sample_shape = sample0.shape  # type: ignore[assignment]
 
         self._rng = torch.Generator().manual_seed(seed)
+
+        if subset_length is not None:
+            n = min(int(subset_length), len(self._dataset))
+            self._dataset = Subset(self._dataset, list(range(n)))
 
     def __len__(self) -> int:
         return len(self._dataset)
