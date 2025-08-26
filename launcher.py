@@ -7,6 +7,7 @@ Replaces the original train.sh script with Python-based logic.
 import argparse
 import os
 import subprocess
+import shlex
 import sys
 from pathlib import Path
 from typing import List
@@ -69,10 +70,11 @@ def run_local_training(device: str, extra_args: List[str]) -> None:
 
     # Activate virtual environment and run training
     activate_script = ".venv/bin/activate"
+    extra = " ".join(shlex.quote(a) for a in extra_args)
     cmd = [
         "bash",
         "-c",
-        f"source {activate_script} && python train.py device={device} {' '.join(extra_args)}",
+        f"source {activate_script} && python train.py device={device} {extra}",
     ]
 
     subprocess.run(cmd, check=True)
@@ -89,7 +91,7 @@ def run_modal_training(extra_args: List[str]) -> None:
         print("Error: 'modal' CLI not found. Install with: pip install modal")
         sys.exit(1)
 
-    cli_args = " ".join(extra_args)
+    cli_args = " ".join(shlex.quote(a) for a in extra_args)
     activate_script = ".venv/bin/activate"
     cmd = [
         "bash",

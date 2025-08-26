@@ -56,6 +56,21 @@ def train_on_modal(extra_args: list[str]) -> None:
     # Workdir contains our code baked into the image
     os.chdir("/root/app")
 
+    # If a pre-uploaded archive exists in the persisted volume, extract it
+    try:
+        if os.path.exists("/data/celeba.tar.gz") and not os.path.exists("/data/celeba"):
+            print("[modal] Found /data/celeba.tar.gz in volume, extracting...")
+            subprocess.run(
+                [
+                    "bash",
+                    "-lc",
+                    "mkdir -p /data && tar -xzf /data/celeba.tar.gz -C /data",
+                ],
+                check=True,
+            )
+    except Exception as e:
+        print(f"[modal] Warning: dataset extraction skipped: {e}")
+
     # Verify GPU availability
     import torch
 

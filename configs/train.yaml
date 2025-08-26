@@ -10,6 +10,7 @@ precision: fp32       # choices: fp32, bf16, fp16
 
 # Training
 epochs: 10
+eval_every: 1
 
 # Checkpointing
 ckpt_dir: outputs/ckpts

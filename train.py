@@ -14,10 +14,7 @@ from helpers import (
     build_device,
     build_precision_settings,
     build_scaler,
-    build_dataset,
-    build_dataset_from_config,
     build_dataloader_from_config,
-    build_dataloader,
     build_model,
     build_optimizer,
     build_criterion,
@@ -147,6 +144,7 @@ def train(cfg: DictConfig) -> None:
     )
 
     epochs: int = int(cfg.get("epochs", 1))
+    eval_every: int = int(cfg.get("eval_every", 1))  # how often to run eval (in epochs)
     for epoch in range(start_epoch, epochs + 1):
         avg_loss = train_one_epoch(
             model=model,
@@ -159,11 +157,12 @@ def train(cfg: DictConfig) -> None:
         )
         print(f"epoch {epoch:04d} | loss {avg_loss:.6f}")
 
-        # Eval (distributional)
-        ed = evaluate_epoch_energy_distance(
-            model=model, eval_loader=eval_loader, device=device, solver=solver
-        )
-        print(f"eval energy_distance {ed:.6f}")
+        # Eval (distributional) based on eval_every policy
+        if eval_every > 0 and (epoch % eval_every == 0 or epoch == epochs):
+            ed = evaluate_epoch_energy_distance(
+                model=model, eval_loader=eval_loader, device=device, solver=solver
+            )
+            print(f"eval energy_distance {ed:.6f}")
 
         # Save checkpoint based on policy
         save_if_needed(
