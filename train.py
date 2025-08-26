@@ -107,6 +107,11 @@ def train(cfg: DictConfig) -> None:
     eval_loader = build_dataloader_from_config(cfg.dataloaders.eval, device)
 
     model = build_model(cfg, device)
+    # Derive architecture-specific checkpoint directory: outputs/ckpts/<arch>
+    arch_name = model.__class__.__name__.lower()
+    base_ckpt_dir = str(cfg.get("ckpt_dir", "outputs/ckpts"))
+    cfg.ckpt_dir = f"{base_ckpt_dir}/{arch_name}"
+    # keep ckpt_name as-is (defaults to last.pt)
     optimizer = build_optimizer(cfg, model)
     criterion = build_criterion(cfg)
     # Build solver
