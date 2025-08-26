@@ -55,5 +55,9 @@ data/
 **/outputs/vis/*.gif
 **/outputs/ckpts/*.pt
 
+# Archives
+*.tar.gz
+celeba.tar.gz
+
 # uv
 .uv/
