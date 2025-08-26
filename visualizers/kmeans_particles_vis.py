@@ -25,6 +25,8 @@ def animate_particles(
     fps: int = 20,
     marker_size: int = 10,
     times: list[float] | None = None,
+    show_solver_in_title: bool = False,
+    solver_name: str | None = None,
 ) -> None:
     minv, maxv = bounds
     frames = [t.detach().cpu().numpy() for t in trajectory]
@@ -39,13 +41,16 @@ def animate_particles(
     ax.set_ylim(minv, maxv)
     ax.set_aspect("equal")
     t0 = float(times_list[0]) if times_list else 0.0
-    ax.set_title(f"Particle flow animation t={t0:.02f}")
+    title_prefix = "Particle flow animation"
+    if show_solver_in_title and solver_name:
+        title_prefix = f"{title_prefix} [{solver_name}]"
+    ax.set_title(f"{title_prefix} t={t0:.02f}")
     scat = ax.scatter(frames[0][:, 0], frames[0][:, 1], s=marker_size, c="tab:blue")
 
     def update(frame_idx: int):
         pts = frames[frame_idx]
         scat.set_offsets(pts)
-        ax.set_title(f"Particle flow animation t={float(times_list[frame_idx]):.02f}")
+        ax.set_title(f"{title_prefix} t={float(times_list[frame_idx]):.02f}")
         return (scat,)
 
     anim = FuncAnimation(
@@ -86,6 +91,11 @@ def main() -> None:
         default="euler",
         help="Which ODE solver to use for integration",
     )
+    parser.add_argument(
+        "--title-solver",
+        action="store_true",
+        help="Include solver name in the animation title",
+    )
     args = parser.parse_args()
 
     # Device selection
@@ -97,6 +107,7 @@ def main() -> None:
         solver = EulerSolver(model=model, num_steps=int(args.steps))
     else:
         solver = RK4Solver(model=model, num_steps=int(args.steps))
+    solver_name_pretty = type(solver).__name__.replace("Solver", "")
 
     # Build dataloader strictly from checkpoint's resolved config
     ckpt_blob = torch.load(args.ckpt, map_location="cpu", weights_only=False)
@@ -119,6 +130,8 @@ def main() -> None:
         fps=int(args.fps),
         marker_size=int(args.size),
         times=result.times,
+        show_solver_in_title=bool(args.title_solver),
+        solver_name=solver_name_pretty,
     )
     print(f"Saved particle animation to {args.out}")
 
