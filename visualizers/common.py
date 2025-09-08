@@ -5,6 +5,7 @@ from pathlib import Path
 
 import torch
 import matplotlib
+from matplotlib.animation import PillowWriter, ImageMagickWriter, FFMpegWriter
 import numpy as np
 from omegaconf import OmegaConf
 from hydra.utils import instantiate
@@ -165,3 +166,66 @@ def mp4_to_gif(mp4_path: str, gif_path: str, fps: int = 20) -> None:
         Path(palette_path).unlink(missing_ok=True)
     except Exception:
         pass
+
+
+def tensor_to_display_image(x: torch.Tensor) -> np.ndarray:
+    """Convert (C,H,W) tensor in [-1,1] or [0,1] to numpy image for imshow.
+
+    If C==1 returns HxW; if C==3 returns HxWx3; otherwise returns grayscale.
+    """
+    if x.dim() != 3:
+        raise ValueError(f"Expected image of shape (C,H,W), got {tuple(x.shape)}")
+
+    x_cpu = x.detach().to("cpu", dtype=torch.float32)
+
+    # Map [-1,1] to [0,1] if needed
+    if float(x_cpu.min()) < -0.5:
+        x_cpu = (x_cpu + 1.0) * 0.5
+
+    x_cpu = torch.clamp(x_cpu, 0.0, 1.0)
+
+    if x_cpu.shape[0] == 1:
+        return x_cpu[0].numpy()
+    if x_cpu.shape[0] == 3:
+        return x_cpu.permute(1, 2, 0).numpy()
+
+    # Fallback: average channels to grayscale
+    return x_cpu.mean(dim=0).numpy()
+
+
+def save_animation(anim, out_path: str, fps: int = 20) -> None:
+    """Save a Matplotlib animation to .mp4/.gif with sensible defaults.
+
+    Prefers MP4 (H.264) when requested; falls back to ImageMagick GIF or Pillow.
+    """
+    ensure_dir_for(out_path)
+    out_path_lower = out_path.lower()
+    if out_path_lower.endswith(".mp4") and FFMpegWriter.isAvailable():
+        anim.save(
+            out_path,
+            writer=FFMpegWriter(
+                fps=fps,
+                codec="libx264",
+                bitrate=8000,
+                extra_args=["-pix_fmt", "yuv420p", "-crf", "14", "-preset", "slow"],
+            ),
+        )
+        return
+    if out_path_lower.endswith(".gif") and ImageMagickWriter.isAvailable():
+        anim.save(
+            out_path,
+            writer=ImageMagickWriter(
+                fps=fps,
+                extra_args=[
+                    "-dither",
+                    "FloydSteinberg",
+                    "-colors",
+                    "256",
+                    "-layers",
+                    "OptimizeTransparency",
+                ],
+            ),
+        )
+        return
+    # Fallback to Pillow
+    anim.save(out_path, writer=PillowWriter(fps=fps))

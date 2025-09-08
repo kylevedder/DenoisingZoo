@@ -9,12 +9,7 @@ import matplotlib
 # Headless rendering (same as particles_anim)
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
-from matplotlib.animation import (
-    FuncAnimation,
-    PillowWriter,
-    ImageMagickWriter,
-    FFMpegWriter,
-)  # noqa: E402
+from matplotlib.animation import FuncAnimation  # noqa: E402
 
 from visualizers.common import (
     get_device,
@@ -24,6 +19,7 @@ from visualizers.common import (
     flow_to_rgb,
     add_direction_wheel_inset,
     mp4_to_gif,
+    save_animation,
 )
 
 
@@ -83,34 +79,7 @@ def animate_flow(
         fig, update, frames=len(t_values), interval=1000 / max(1, fps), blit=True
     )
     ensure_dir_for(out_gif)
-    # Prefer MP4 (H.264) for smooth gradients; fall back to high-quality GIF
-    if out_gif.lower().endswith(".mp4") and FFMpegWriter.isAvailable():
-        anim.save(
-            out_gif,
-            writer=FFMpegWriter(
-                fps=fps,
-                codec="libx264",
-                bitrate=8000,
-                extra_args=["-pix_fmt", "yuv420p", "-crf", "14", "-preset", "slow"],
-            ),
-        )
-    elif out_gif.lower().endswith(".gif") and ImageMagickWriter.isAvailable():
-        anim.save(
-            out_gif,
-            writer=ImageMagickWriter(
-                fps=fps,
-                extra_args=[
-                    "-dither",
-                    "FloydSteinberg",
-                    "-colors",
-                    "256",
-                    "-layers",
-                    "OptimizeTransparency",
-                ],
-            ),
-        )
-    else:
-        anim.save(out_gif, writer=PillowWriter(fps=fps))
+    save_animation(anim, out_gif, fps=fps)
     plt.close(fig)
 
 
