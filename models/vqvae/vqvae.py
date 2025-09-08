@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import torch
 from torch import nn
+from dataloaders.base_dataloaders import make_ununified_flow_matching_input
 
 
 @dataclass
@@ -169,17 +170,17 @@ class VQVAE(nn.Module):
         self.reconstruction_criterion = nn.L1Loss()
 
     def _extract_image_from_unified(self, unified_input: torch.Tensor) -> torch.Tensor:
-        if unified_input.dim() != 4:
+        uu = make_ununified_flow_matching_input(unified_input)
+        x = uu.x
+        if x.dim() != 4:
             raise ValueError(
-                f"unified_input must be rank-4 (B, C, H, W), got shape {tuple(unified_input.shape)}"
+                f"Extracted image must be rank-4 (B, C, H, W), got shape {tuple(x.shape)}"
             )
-        if unified_input.shape[1] < self.in_channels:
+        if x.shape[1] != self.in_channels:
             raise ValueError(
-                f"unified_input has {unified_input.shape[1]} channels; expected at least {self.in_channels}"
+                f"Extracted image has {x.shape[1]} channels; expected {self.in_channels}"
             )
-        if unified_input.shape[1] == self.in_channels:
-            return unified_input
-        return unified_input[:, : self.in_channels, ...]
+        return x
 
     def forward(self, unified_input: torch.Tensor) -> ForwardResult:
         x = self._extract_image_from_unified(unified_input)
