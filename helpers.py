@@ -284,6 +284,25 @@ def save_if_needed(
         )
         print(f"Saved checkpoint to {ckpt_path}")
 
+        # Also archive by run name/info + epoch to keep all checkpoints
+        try:
+            run_name = str(cfg.get("run_name", "run"))
+        except Exception:
+            run_name = "run"
+        archive_dir = os.path.join(os.path.dirname(ckpt_path), "archive")
+        os.makedirs(archive_dir, exist_ok=True)
+        archive_name = f"{run_name}_epoch_{epoch:04d}.pt"
+        archive_path = os.path.join(archive_dir, archive_name)
+        save_checkpoint(
+            path=archive_path,
+            model=model,
+            optimizer=optimizer,
+            scaler=scaler,
+            epoch=epoch,
+            cfg=cfg,
+        )
+        print(f"Archived checkpoint to {archive_path}")
+
 
 # -----------------------------------------------------------------------------
 # Distributional evaluation helpers (U-statistics)

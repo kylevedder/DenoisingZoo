@@ -2,6 +2,7 @@
 defaults:
   - dataloaders: kmeans
   - model: mlp
+  - loss: mse
   - _self_
 
 # Device and precision
@@ -24,10 +25,6 @@ optimizer:
   _target_: torch.optim.AdamW
   lr: 1.0e-3
   weight_decay: 0.0
-
-# Loss (Hydra-instantiable)
-loss:
-  _target_: torch.nn.MSELoss
 
 # Solver configuration
 solver:

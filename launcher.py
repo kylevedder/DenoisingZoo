@@ -5,7 +5,6 @@ Replaces the original train.sh script with Python-based logic.
 """
 
 import argparse
-import os
 import subprocess
 import shlex
 import sys
@@ -13,6 +12,7 @@ from pathlib import Path
 from typing import List
 
 import torch
+from datetime import datetime
 
 
 def check_uv_available() -> bool:
@@ -64,13 +64,20 @@ def detect_device() -> str:
     return "cpu"
 
 
-def run_local_training(device: str, extra_args: List[str]) -> None:
+def run_local_training(device: str, extra_args: List[str], run_name: str) -> None:
     """Run training locally with the specified device."""
     print(f"Running local training on device: {device}")
 
     # Activate virtual environment and run training
     activate_script = ".venv/bin/activate"
-    extra = " ".join(shlex.quote(a) for a in extra_args)
+    args_with_run = list(extra_args)
+    if not any(
+        str(a).startswith("run_name=") or str(a).startswith("+run_name=")
+        for a in args_with_run
+    ):
+        # Use Hydra append syntax to allow adding keys to struct configs
+        args_with_run.append(f"+run_name={run_name}")
+    extra = " ".join(shlex.quote(a) for a in args_with_run)
     cmd = [
         "bash",
         "-c",
@@ -80,7 +87,7 @@ def run_local_training(device: str, extra_args: List[str]) -> None:
     subprocess.run(cmd, check=True)
 
 
-def run_modal_training(extra_args: List[str]) -> None:
+def run_modal_training(extra_args: List[str], run_name: str) -> None:
     """Run training on Modal with NVIDIA GPU (streams logs)."""
     print("Running training on Modal with NVIDIA GPU...")
 
@@ -91,7 +98,13 @@ def run_modal_training(extra_args: List[str]) -> None:
         print("Error: 'modal' CLI not found. Install with: pip install modal")
         sys.exit(1)
 
-    cli_args = " ".join(shlex.quote(a) for a in extra_args)
+    args_with_run = list(extra_args)
+    if not any(
+        str(a).startswith("run_name=") or str(a).startswith("+run_name=")
+        for a in args_with_run
+    ):
+        args_with_run.append(f"+run_name={run_name}")
+    cli_args = " ".join(shlex.quote(a) for a in args_with_run)
     activate_script = ".venv/bin/activate"
     cmd = [
         "bash",
@@ -127,14 +140,17 @@ def main():
     # Set up virtual environment
     setup_venv()
 
+    # Generate a default run name timestamp if not provided by user
+    run_name = datetime.now().strftime("%Y%m%d_%H%M%S")
+
     if args.backend == "modal":
-        run_modal_training(args.extra_args)
+        run_modal_training(args.extra_args, run_name)
     else:
         # Local training
         device = args.device
         if device == "auto":
             device = detect_device()
-        run_local_training(device, args.extra_args)
+        run_local_training(device, args.extra_args, run_name)
 
 
 if __name__ == "__main__":

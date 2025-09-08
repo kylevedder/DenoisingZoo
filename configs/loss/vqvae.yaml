@@ -1,0 +1,6 @@
+_target_: models.vqvae.losses.VQVAETrainingLoss
+recon_weight: 1.0
+vq_weight: 1.0
+base_loss: l1
+
+
