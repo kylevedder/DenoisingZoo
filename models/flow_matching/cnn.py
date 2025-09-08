@@ -54,19 +54,9 @@ class SmallCNN(nn.Module):
 
         self.net = nn.Sequential(*layers)
 
-    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        if x.dim() != 4:
+    def forward(self, unified_input: torch.Tensor) -> torch.Tensor:
+        if unified_input.dim() != 4:
             raise ValueError(
-                f"x must be rank-4 (B, C, H, W), got shape {tuple(x.shape)}"
+                f"unified_input must be rank-4 (B, C, H, W), got shape {tuple(unified_input.shape)}"
             )
-        if t.dim() != 2 or t.shape[1] != 1:
-            raise ValueError(f"t must be rank-2 (B, 1), got shape {tuple(t.shape)}")
-        if x.shape[0] != t.shape[0]:
-            raise ValueError(
-                f"Batch size mismatch between x and t: {x.shape[0]} vs {t.shape[0]}"
-            )
-
-        t_map = t.to(dtype=x.dtype, device=x.device).view(-1, 1, 1, 1)
-        t_map = t_map.expand(-1, 1, x.shape[2], x.shape[3])
-        xt = torch.cat([x, t_map], dim=1)
-        return self.net(xt)
+        return self.net(unified_input)

@@ -11,6 +11,7 @@ from omegaconf import OmegaConf
 from hydra.utils import instantiate
 import shutil
 import subprocess
+from dataloaders.base_dataloaders import make_unified_input
 
 
 def get_device() -> torch.device:
@@ -66,7 +67,8 @@ def compute_flow_field(
     pos = torch.stack([X, Y], dim=-1).reshape(-1, 2)
     t = torch.full((pos.shape[0], 1), float(time_t), device=device)
 
-    vec = model(pos, t)
+    unified = make_unified_input(pos, t)
+    vec = model(unified)
     U = vec[:, 0].reshape(num_points_per_dim, num_points_per_dim)
     V = vec[:, 1].reshape(num_points_per_dim, num_points_per_dim)
     mag = torch.sqrt(U * U + V * V)

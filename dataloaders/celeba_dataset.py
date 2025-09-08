@@ -7,7 +7,7 @@ import torch
 from torchvision import datasets, transforms  # type: ignore[import]
 from torch.utils.data import Subset
 
-from dataloaders.base_dataloaders import BaseDataset, BaseItem
+from dataloaders.base_dataloaders import BaseDataset, BaseItem, make_unified_input
 
 
 @dataclass
@@ -98,4 +98,7 @@ class CelebADataset(BaseDataset):
         x_t = x * (1 - t) + y * t
         v = y - x
 
-        return CelebAItem(raw_source=x, raw_target=y, t=t, input=x_t, target=v)
+        unified = make_unified_input(x_t.unsqueeze(0), t.unsqueeze(0)).squeeze(0)
+        return CelebAItem(
+            raw_source=x, raw_target=y, t=t, input=x_t, target=v, unified_input=unified
+        )

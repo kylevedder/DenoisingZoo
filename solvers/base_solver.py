@@ -9,7 +9,7 @@ import torch
 
 class VectorFieldModel(Protocol):
     def __call__(
-        self, x: torch.Tensor, t: torch.Tensor
+        self, unified_input: torch.Tensor
     ) -> torch.Tensor:  # pragma: no cover - protocol
         ...
 

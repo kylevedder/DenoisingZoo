@@ -7,7 +7,7 @@ from omegaconf import DictConfig, OmegaConf
 
 import torch
 from torch.utils.data import DataLoader
-import tqdm
+import tqdm  # type: ignore[import-not-found]
 
 from helpers import (
     PrecisionSettings,
@@ -37,8 +37,7 @@ def compute_loss(
     settings: PrecisionSettings,
     criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
 ) -> torch.Tensor:
-    x = batch["input"].to(device, non_blocking=True)
-    t = batch["t"].to(device, non_blocking=True)
+    unified = batch["unified_input"].to(device, non_blocking=True)
     y = batch["target"].to(device, non_blocking=True)
 
     with torch.autocast(
@@ -46,7 +45,7 @@ def compute_loss(
         dtype=settings.autocast_dtype,
         enabled=settings.autocast_dtype is not None,
     ):
-        pred = model(x, t)
+        pred = model(unified)
         loss = criterion(pred, y)
     return loss
 

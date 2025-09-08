@@ -4,6 +4,7 @@ import numpy as np
 import torch
 
 from solvers.base_solver import BaseSolver, FlowSolveResult, VectorFieldModel
+from dataloaders.base_dataloaders import make_unified_input
 
 
 class RK4Solver(BaseSolver):
@@ -34,15 +35,15 @@ class RK4Solver(BaseSolver):
             t2 = t0 + dt
 
             t0_tensor = torch.full((x.shape[0], 1), t0, device=x.device, dtype=x.dtype)
-            k1 = self._model(x, t0_tensor)
+            k1 = self._model(make_unified_input(x, t0_tensor))
 
             t1_tensor = torch.full((x.shape[0], 1), t1, device=x.device, dtype=x.dtype)
-            k2 = self._model(x + 0.5 * dt * k1, t1_tensor)
+            k2 = self._model(make_unified_input(x + 0.5 * dt * k1, t1_tensor))
 
-            k3 = self._model(x + 0.5 * dt * k2, t1_tensor)
+            k3 = self._model(make_unified_input(x + 0.5 * dt * k2, t1_tensor))
 
             t2_tensor = torch.full((x.shape[0], 1), t2, device=x.device, dtype=x.dtype)
-            k4 = self._model(x + dt * k3, t2_tensor)
+            k4 = self._model(make_unified_input(x + dt * k3, t2_tensor))
 
             x = x + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
             trajectory.append(x.clone())

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import torch
 
-from dataloaders.base_dataloaders import BaseDataset, BaseItem
+from dataloaders.base_dataloaders import BaseDataset, BaseItem, make_unified_input
 
 
 @dataclass
@@ -49,8 +49,14 @@ class GaussianKMeansDataset(BaseDataset):
         # target, irrespective of the time
         pred_target = y - x
 
+        unified = make_unified_input(x_t.unsqueeze(0), t.unsqueeze(0)).squeeze(0)
         return KMeansItem(
-            raw_source=x, raw_target=pred_target, t=t, input=x_t, target=pred_target
+            raw_source=x,
+            raw_target=pred_target,
+            t=t,
+            input=x_t,
+            target=pred_target,
+            unified_input=unified,
         )
 
     # Private single-sample generators -------------------------------------------------
@@ -60,8 +66,9 @@ class GaussianKMeansDataset(BaseDataset):
 
     def _generate_target(self) -> torch.Tensor:
         num_means = self._centroids.shape[0]
-        component = torch.randint(0, num_means, (1,), generator=self._rng).item()
-        mean = self._centroids[component]
+        component = int(torch.randint(0, num_means, (1,), generator=self._rng).item())
+        idx = torch.tensor([component], dtype=torch.long)
+        mean = torch.index_select(self._centroids, 0, idx)[0]
         sample = (
             torch.randn(self._sample_size, generator=self._rng) * self._target_std
             + mean

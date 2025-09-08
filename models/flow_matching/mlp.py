@@ -31,27 +31,10 @@ class MLP(nn.Module):
             nn.Linear(hidden_dim, feature_dim),
         )
 
-    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        """Forward pass.
-
-        Args:
-            x: Tensor of shape (batch_size, feature_dim)
-            t: Tensor of shape (batch_size, 1)
-
-        Returns:
-            Tensor of shape (batch_size, feature_dim)
-        """
-        if x.dim() != 2:
-            raise ValueError(f"x must be rank-2 (B, n), got shape {tuple(x.shape)}")
-        if t.dim() != 2:
-            raise ValueError(f"t must be rank-2 (B, 1), got shape {tuple(t.shape)}")
-        if t.shape[1] != 1:
-            raise ValueError(f"t's feature dimension must be 1, got {t.shape[1]}")
-        if x.shape[0] != t.shape[0]:
+    def forward(self, unified_input: torch.Tensor) -> torch.Tensor:
+        """Forward pass with unified input of shape (B, feature_dim + 1)."""
+        if unified_input.dim() != 2:
             raise ValueError(
-                f"Batch size mismatch between x and t: {x.shape[0]} vs {t.shape[0]}"
+                f"unified_input must be rank-2 (B, n), got shape {tuple(unified_input.shape)}"
             )
-
-        t = t.to(dtype=x.dtype, device=x.device)
-        xt = torch.cat([x, t], dim=1)
-        return self.net(xt)
+        return self.net(unified_input)
