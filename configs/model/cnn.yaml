@@ -1,4 +1,4 @@
-_target_: models.cnn.SmallCNN
+_target_: models.flow_matching.cnn.SmallCNN
 in_channels: 3
 out_channels: 3
 base_channels: 64
