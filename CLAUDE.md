@@ -6,6 +6,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 DenoisingZoo is a research codebase for Flow Matching—a generative modeling technique where neural networks learn velocity fields to transform between distributions via ODE integration. Includes MeanFlow implementation for single-step generation.
 
+## Experiment Log
+
+**IMPORTANT: Always keep `EXPERIMENT_LOG.md` up to date.**
+
+When running experiments:
+1. **Before starting**: Add a new experiment section with config, command, and expected outcomes
+2. **During training**: Update results as they come in (loss values, metrics)
+3. **After completion**: Record final results, observations, and any issues encountered
+4. **When changing configs**: Log parameter changes with reasoning in the "Configuration Change Log" section
+
+The experiment log tracks:
+- Hyperparameter configurations and their sources (e.g., paper references)
+- Training commands for reproducibility
+- Results tables with loss/metrics progression
+- Observations, issues, and next steps
+
+This is critical for tracking research progress and debugging training issues.
+
 ## Development Environment
 
 **Primary development is on Apple Silicon (MPS).** Always use MPS for training and testing to utilize hardware acceleration and save wallclock time. Default device configs are set to `mps`. When writing training loops or test scripts, always move tensors and models to the appropriate device:
