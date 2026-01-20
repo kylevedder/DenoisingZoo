@@ -133,26 +133,19 @@ class MeanFlowLoss(nn.Module):
         # where JVP = ∂v_t/∂z_t · v_t
 
         if use_meanflow.any():
-            # Create unified input for time t
             # We need to compute JVP: ∂v_t/∂z_t · v_t
-            # Use functional JVP: jvp(f, (z,), (v,)) gives (f(z), Jf · v)
+            # Use linearize for efficiency: single forward pass instead of two
 
-            # Get v_t first (needed for JVP)
-            with torch.no_grad():
-                v_t_initial = self._model(unified_t)
-
-            # Compute JVP
             def model_fn(z: torch.Tensor) -> torch.Tensor:
                 # Rebuild unified input with z but keep original t
                 unified = make_unified_flow_matching_input(z, t)
                 return self._model(unified)
 
-            # Use torch.func.jvp for Jacobian-vector product
-            v_t, jvp_result = torch.func.jvp(
-                model_fn,
-                (z_t,),
-                (v_t_initial.detach(),),  # tangent is v_t itself
-            )
+            # Single forward pass + linearization (more efficient than jvp)
+            v_t, jvp_fn = torch.func.linearize(model_fn, z_t)
+
+            # Compute JVP using v_t as tangent vector
+            jvp_result = jvp_fn(v_t)
 
             # Compute MeanFlow target: u_tgt = v_t - (t - r) * jvp
             delta_t = self._broadcast_time(t - r, v_t)
