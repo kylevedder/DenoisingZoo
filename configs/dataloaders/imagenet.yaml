@@ -1,0 +1,28 @@
+train:
+  dataset:
+    _target_: dataloaders.imagenet_dataset.ImageNetDataset
+    root: data/imagenet
+    split: train
+    image_size: 256
+    seed: 42
+    label_dropout: 0.1
+    null_label: 1000
+  batch_size: 64
+  shuffle: true
+  num_workers: 8
+  pin_memory: true
+  drop_last: true
+eval:
+  dataset:
+    _target_: dataloaders.imagenet_dataset.ImageNetDataset
+    root: data/imagenet
+    split: val
+    image_size: 256
+    seed: 1337
+    label_dropout: 0.0
+    null_label: 1000
+  batch_size: 64
+  shuffle: false
+  num_workers: 8
+  pin_memory: true
+  drop_last: false

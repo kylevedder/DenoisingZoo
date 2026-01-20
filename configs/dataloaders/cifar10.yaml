@@ -1,0 +1,24 @@
+train:
+  dataset:
+    _target_: dataloaders.cifar10_dataset.CIFAR10Dataset
+    root: data/cifar10
+    train: true
+    download: true
+    seed: 42
+  batch_size: 128
+  shuffle: true
+  num_workers: 4
+  pin_memory: true
+  drop_last: false
+eval:
+  dataset:
+    _target_: dataloaders.cifar10_dataset.CIFAR10Dataset
+    root: data/cifar10
+    train: false
+    download: true
+    seed: 1337
+  batch_size: 128
+  shuffle: false
+  num_workers: 4
+  pin_memory: true
+  drop_last: false
