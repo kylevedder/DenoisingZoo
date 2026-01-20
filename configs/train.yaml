@@ -31,3 +31,8 @@ solver:
   _target_: solvers.euler_solver.EulerSolver
   num_steps: 50
 
+# Experiment tracking (Trackio)
+trackio:
+  enabled: true
+  project: denoising-zoo
+

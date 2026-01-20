@@ -18,6 +18,7 @@ dependencies = [
   "matplotlib>=3.8",
   "modal>=0.68.0",
   "gdown>=5.2",
+  "trackio>=0.1",
 ]
 
 [build-system]
