@@ -151,4 +151,4 @@ class SyntheticShapesFlowDataset(BaseDataset):
             x_t.unsqueeze(0), t.unsqueeze(0)
         ).squeeze(0)
 
-        return BaseItem(input=x_t, t=t, target=v, unified_input=unified)
+        return BaseItem(input=x_t, t=t, target=v, unified_input=unified, raw_source=x, raw_target=y)
