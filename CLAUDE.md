@@ -80,6 +80,18 @@ trackio get metric --project denoising-zoo --run <run> --metric "eval/energy_dis
 trackio get metric --project denoising-zoo --run <run> --metric "gpu/util_pct" --json
 ```
 
+**Deleting runs:**
+```bash
+# List all runs
+python scripts/trackio_delete.py --list
+
+# Delete runs matching a regex pattern (with confirmation)
+python scripts/trackio_delete.py "test_.*"
+
+# Preview what would be deleted
+python scripts/trackio_delete.py "old_experiment" --dry-run
+```
+
 **Storage:** `~/.cache/huggingface/trackio/`
 
 ### Visualization
