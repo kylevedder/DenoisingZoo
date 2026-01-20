@@ -9,6 +9,8 @@ import torch
 from torch.utils.data import DataLoader
 import tqdm  # type: ignore[import-not-found]
 
+import trackio
+
 from helpers import (
     PrecisionSettings,
     build_device,
@@ -24,10 +26,68 @@ from helpers import (
     evaluate_epoch_energy_distance,
     load_checkpoint,
 )
+from losses.meanflow_loss import MeanFlowLoss
 from hydra.utils import instantiate
+from gpu_monitor import GPUMetricsMonitor
 
 
 Batch = dict[str, torch.Tensor]
+
+
+def init_trackio(cfg: DictConfig) -> bool:
+    """Initialize trackio experiment tracking if enabled.
+
+    Returns True if trackio was initialized, False otherwise.
+    """
+    trackio_cfg = cfg.get("trackio", {})
+    if not trackio_cfg.get("enabled", False):
+        return False
+
+    # Convert OmegaConf to plain dict for trackio config
+    config_dict = OmegaConf.to_container(cfg, resolve=True)
+    project = trackio_cfg.get("project", "denoising-zoo")
+
+    trackio.init(project=project, config=config_dict)
+    print(f"Trackio: project={project}")
+    return True
+
+
+def log_trackio(
+    metrics: dict,
+    enabled: bool,
+    device: torch.device,
+    gpu_monitor: GPUMetricsMonitor | None = None,
+) -> None:
+    """Log metrics to trackio if enabled.
+
+    If a gpu_monitor is provided and running, uses its rolling averages for
+    GPU metrics. Otherwise, only logs MPS memory metrics.
+    """
+    if enabled:
+        if device.type == "mps":
+            if gpu_monitor is not None and gpu_monitor.is_running():
+                metrics.update(gpu_monitor.get_metrics())
+            else:
+                # Fallback: just log MPS memory without GPU utilization
+                metrics["mps/allocated_mb"] = (
+                    torch.mps.current_allocated_memory() / 1024**2
+                )
+                metrics["mps/driver_mb"] = (
+                    torch.mps.driver_allocated_memory() / 1024**2
+                )
+        trackio.log(metrics)
+
+
+def finish_trackio(enabled: bool) -> None:
+    """Finish trackio run if enabled."""
+    if enabled:
+        trackio.finish()
+        print("Trackio run finished")
+
+
+def is_meanflow_loss(criterion: object) -> bool:
+    """Check if criterion is a MeanFlow loss that requires special handling."""
+    return isinstance(criterion, MeanFlowLoss)
 
 
 def compute_loss(
@@ -35,18 +95,22 @@ def compute_loss(
     batch: Batch,
     device: torch.device,
     settings: PrecisionSettings,
-    criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+    criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | MeanFlowLoss,
 ) -> torch.Tensor:
-    unified = batch["unified_input"].to(device, non_blocking=True)
-    y = batch["target"].to(device, non_blocking=True)
-
     with torch.autocast(
         device_type=settings.device_type,
         dtype=settings.autocast_dtype,
         enabled=settings.autocast_dtype is not None,
     ):
-        pred = model(unified)
-        loss = criterion(pred, y)
+        if is_meanflow_loss(criterion):
+            # MeanFlow loss handles model forward internally
+            loss = criterion(batch, device)
+        else:
+            # Standard loss: model(unified_input) -> pred, loss(pred, target)
+            unified = batch["unified_input"].to(device, non_blocking=True)
+            y = batch["target"].to(device, non_blocking=True)
+            pred = model(unified)
+            loss = criterion(pred, y)
     return loss
 
 
@@ -113,6 +177,11 @@ def train(cfg: DictConfig) -> None:
     # keep ckpt_name as-is (defaults to last.pt)
     optimizer = build_optimizer(cfg, model)
     criterion = build_criterion(cfg)
+
+    # If using MeanFlow loss, inject the model
+    if is_meanflow_loss(criterion):
+        criterion.set_model(model)
+        print("Using MeanFlow loss")
     # Build solver
     solver = instantiate(cfg.solver, model=model)
 
@@ -147,6 +216,16 @@ def train(cfg: DictConfig) -> None:
         device=device,
     )
 
+    # Initialize experiment tracking
+    trackio_enabled = init_trackio(cfg)
+
+    # Start async GPU metrics monitor for MPS devices
+    gpu_monitor: GPUMetricsMonitor | None = None
+    if device.type == "mps":
+        gpu_monitor = GPUMetricsMonitor()  # streams from macmon, 500ms interval, 5s window
+        gpu_monitor.start()
+        print("GPU metrics monitor started (streaming from macmon)")
+
     epochs: int = int(cfg.get("epochs", 1))
     eval_every: int = int(cfg.get("eval_every", 1))  # how often to run eval (in epochs)
     for epoch in range(start_epoch, epochs + 1):
@@ -161,12 +240,19 @@ def train(cfg: DictConfig) -> None:
         )
         print(f"epoch {epoch:04d} | loss {avg_loss:.6f}")
 
+        # Prepare metrics for logging
+        metrics = {"epoch": epoch, "train/loss": avg_loss}
+
         # Eval (distributional) based on eval_every policy
         if eval_every > 0 and (epoch % eval_every == 0 or epoch == epochs):
             ed = evaluate_epoch_energy_distance(
                 model=model, eval_loader=eval_loader, device=device, solver=solver
             )
             print(f"eval energy_distance {ed:.6f}")
+            metrics["eval/energy_distance"] = ed
+
+        # Log metrics to trackio
+        log_trackio(metrics, trackio_enabled, device, gpu_monitor)
 
         # Save checkpoint based on policy
         save_if_needed(
@@ -178,6 +264,14 @@ def train(cfg: DictConfig) -> None:
             optimizer=optimizer,
             scaler=scaler,
         )
+
+    # Stop GPU monitor
+    if gpu_monitor is not None:
+        gpu_monitor.stop()
+        print("GPU metrics monitor stopped")
+
+    # Finish experiment tracking
+    finish_trackio(trackio_enabled)
 
 
 @hydra.main(config_path="configs", config_name="train", version_base=None)
