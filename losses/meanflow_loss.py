@@ -129,14 +129,14 @@ class MeanFlowLoss(nn.Module):
         v_r = self._model(unified_r)
 
         # Compute target for MeanFlow samples
-        # u_tgt = v_t - (t - r) * JVP(v_t, z_t, v_t)
-        # where JVP = ∂v_t/∂z_t · v_t
+        # From paper Eq. 6: u = v_t - (t - r) * du/dt
+        # From paper Eq. 8: du/dt = v · ∂u/∂z + ∂u/∂t (total derivative along trajectory)
+        # So: u_tgt = v_t - (t - r) * (v_t · ∂v/∂z + ∂v/∂t)
 
         if use_meanflow.any():
-            # We need to compute JVP: ∂v_t/∂z_t · v_t
+            # We need to compute full JVP: v · ∂v/∂z + ∂v/∂t
+            # This requires differentiating w.r.t. both z and t with tangents [v, 1]
             # Only compute for MeanFlow samples to save compute (~4x speedup at ratio=0.25)
-            # Note: linearize would avoid double forward pass but nn.Linear/Conv2d
-            # don't support forward-mode AD yet, so we use jvp with two passes.
 
             # Get indices of MeanFlow samples
             mf_mask = use_meanflow.squeeze(-1)  # (B,) bool
@@ -146,19 +146,21 @@ class MeanFlowLoss(nn.Module):
             t_mf = t[mf_mask]
             r_mf = r[mf_mask]
 
-            def model_fn_mf(z: torch.Tensor) -> torch.Tensor:
-                unified = make_unified_flow_matching_input(z, t_mf)
+            def model_fn_mf(z: torch.Tensor, t_input: torch.Tensor) -> torch.Tensor:
+                unified = make_unified_flow_matching_input(z, t_input)
                 return self._model(unified)
 
-            # First forward pass to get tangent vector
+            # First forward pass to get tangent vector for z
             with torch.no_grad():
-                v_t_mf_tangent = model_fn_mf(z_t_mf)
+                v_t_mf_tangent = model_fn_mf(z_t_mf, t_mf)
 
             # Second forward pass with JVP
+            # Tangent for z is v_t, tangent for t is 1 (dt/dt = 1)
+            tangent_t = torch.ones_like(t_mf)
             v_t_mf, jvp_mf = torch.func.jvp(
                 model_fn_mf,
-                (z_t_mf,),
-                (v_t_mf_tangent,),
+                (z_t_mf, t_mf),
+                (v_t_mf_tangent, tangent_t),
             )
 
             # Compute MeanFlow target for these samples

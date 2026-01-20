@@ -53,8 +53,8 @@ class SimpleCNN(nn.Module):
         return self.net(x)
 
 
-def compute_jvp_two_pass(model, z_t, t):
-    """Current implementation: two forward passes with jvp."""
+def compute_jvp_z_only(model, z_t, t):
+    """JVP with respect to z only (incomplete, missing ∂v/∂t)."""
 
     def model_fn(z: torch.Tensor) -> torch.Tensor:
         unified = make_unified_flow_matching_input(z, t)
@@ -64,7 +64,7 @@ def compute_jvp_two_pass(model, z_t, t):
     with torch.no_grad():
         v_t_initial = model_fn(z_t)
 
-    # Second forward pass inside jvp (uses reverse-mode AD internally)
+    # JVP only with respect to z
     v_t, jvp_result = jvp(
         model_fn,
         (z_t,),
@@ -74,8 +74,30 @@ def compute_jvp_two_pass(model, z_t, t):
     return v_t, jvp_result
 
 
-def compute_jvp_finite_diff(model, z_t, t, eps=1e-4):
-    """Reference implementation using finite differences."""
+def compute_jvp_full(model, z_t, t):
+    """Full JVP: v·∂v/∂z + ∂v/∂t (correct MeanFlow formula from paper Eq. 8)."""
+
+    def model_fn(z: torch.Tensor, t_input: torch.Tensor) -> torch.Tensor:
+        unified = make_unified_flow_matching_input(z, t_input)
+        return model(unified)
+
+    # First forward pass to get tangent vector for z
+    with torch.no_grad():
+        v_t_initial = model_fn(z_t, t)
+
+    # JVP with both z and t: tangent is [v, 1]
+    tangent_t = torch.ones_like(t)
+    v_t, jvp_result = jvp(
+        model_fn,
+        (z_t, t),
+        (v_t_initial.detach(), tangent_t),
+    )
+
+    return v_t, jvp_result
+
+
+def compute_jvp_finite_diff_z_only(model, z_t, t, eps=1e-4):
+    """Finite difference for ∂v/∂z · v only."""
 
     def model_fn(z: torch.Tensor) -> torch.Tensor:
         unified = make_unified_flow_matching_input(z, t)
@@ -84,12 +106,109 @@ def compute_jvp_finite_diff(model, z_t, t, eps=1e-4):
     with torch.no_grad():
         v_t = model_fn(z_t)
 
-        # Finite difference: J @ v ≈ (f(z + eps*v) - f(z - eps*v)) / (2*eps)
+        # Finite difference: ∂v/∂z · v ≈ (f(z + eps*v) - f(z - eps*v)) / (2*eps)
         v_plus = model_fn(z_t + eps * v_t)
         v_minus = model_fn(z_t - eps * v_t)
         jvp_fd = (v_plus - v_minus) / (2 * eps)
 
     return v_t, jvp_fd
+
+
+def compute_jvp_finite_diff_full(model, z_t, t, eps=1e-4):
+    """Finite difference for full JVP: v·∂v/∂z + ∂v/∂t."""
+
+    def model_fn(z: torch.Tensor, t_val: torch.Tensor) -> torch.Tensor:
+        unified = make_unified_flow_matching_input(z, t_val)
+        return model(unified)
+
+    with torch.no_grad():
+        v_t = model_fn(z_t, t)
+
+        # ∂v/∂z · v
+        v_plus_z = model_fn(z_t + eps * v_t, t)
+        v_minus_z = model_fn(z_t - eps * v_t, t)
+        jvp_z = (v_plus_z - v_minus_z) / (2 * eps)
+
+        # ∂v/∂t · 1
+        v_plus_t = model_fn(z_t, t + eps)
+        v_minus_t = model_fn(z_t, t - eps)
+        jvp_t = (v_plus_t - v_minus_t) / (2 * eps)
+
+        # Full JVP
+        jvp_fd = jvp_z + jvp_t
+
+    return v_t, jvp_fd
+
+
+# Backwards compatibility aliases
+compute_jvp_two_pass = compute_jvp_z_only
+compute_jvp_finite_diff = compute_jvp_finite_diff_z_only
+
+
+class TestFullJVPFormula:
+    """Test that full JVP includes both ∂v/∂z·v AND ∂v/∂t terms (paper Eq. 8)."""
+
+    def test_full_jvp_includes_time_derivative(self):
+        """Verify full JVP is different from z-only JVP (∂v/∂t matters)."""
+        torch.manual_seed(42)
+
+        model = SimpleCNN(in_channels=3, hidden_channels=16)
+        model.eval()
+
+        B = 4
+        H, W = 8, 8
+        z_t = torch.randn(B, 3, H, W)
+        t = torch.rand(B, 1) * 0.5 + 0.25  # t in [0.25, 0.75]
+
+        _, jvp_z_only = compute_jvp_z_only(model, z_t, t)
+        _, jvp_full = compute_jvp_full(model, z_t, t)
+
+        # The full JVP should differ from z-only JVP
+        diff_norm = (jvp_full - jvp_z_only).norm()
+        full_norm = jvp_full.norm()
+
+        # ∂v/∂t should contribute significantly (not just numerical noise)
+        assert diff_norm > 0.01 * full_norm, \
+            f"∂v/∂t term should be significant: diff={diff_norm}, full={full_norm}"
+
+    def test_full_jvp_matches_finite_diff(self):
+        """Verify full JVP matches finite difference approximation."""
+        torch.manual_seed(42)
+
+        model = SimpleCNN(in_channels=3, hidden_channels=16)
+        model.eval()
+
+        B = 4
+        H, W = 8, 8
+        z_t = torch.randn(B, 3, H, W)
+        t = torch.rand(B, 1) * 0.5 + 0.25
+
+        _, jvp_full = compute_jvp_full(model, z_t, t)
+        _, jvp_fd = compute_jvp_finite_diff_full(model, z_t, t)
+
+        assert torch.allclose(jvp_full, jvp_fd, atol=1e-2), \
+            f"Full JVP mismatch: {(jvp_full - jvp_fd).abs().max()}"
+
+    def test_meanflow_loss_uses_full_jvp(self):
+        """Verify MeanFlowLoss uses the full JVP formula."""
+        from losses.meanflow_loss import MeanFlowLoss
+
+        torch.manual_seed(42)
+
+        # Use CNN which has significant ∂v/∂t
+        model = SimpleCNN(in_channels=3, hidden_channels=16)
+        loss_fn = MeanFlowLoss(model=model, meanflow_ratio=1.0)  # Force all MeanFlow
+
+        B = 4
+        batch = {
+            'raw_source': torch.randn(B, 3, 8, 8),
+            'raw_target': torch.randn(B, 3, 8, 8),
+        }
+
+        loss = loss_fn(batch)
+        assert loss.ndim == 0, "Loss should be scalar"
+        assert not torch.isnan(loss), "Loss is NaN"
+        assert loss > 0, "Loss should be positive"
 
 
 class TestJVPCorrectness:
