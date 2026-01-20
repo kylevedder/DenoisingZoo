@@ -134,29 +134,40 @@ class MeanFlowLoss(nn.Module):
 
         if use_meanflow.any():
             # We need to compute JVP: ∂v_t/∂z_t · v_t
-            # Use linearize for efficiency: single forward pass instead of two
+            # Only compute for MeanFlow samples to save compute (~4x speedup at ratio=0.25)
+            # Note: linearize would avoid double forward pass but nn.Linear/Conv2d
+            # don't support forward-mode AD yet, so we use jvp with two passes.
 
-            def model_fn(z: torch.Tensor) -> torch.Tensor:
-                # Rebuild unified input with z but keep original t
-                unified = make_unified_flow_matching_input(z, t)
+            # Get indices of MeanFlow samples
+            mf_mask = use_meanflow.squeeze(-1)  # (B,) bool
+
+            # Extract only MeanFlow samples
+            z_t_mf = z_t[mf_mask]
+            t_mf = t[mf_mask]
+            r_mf = r[mf_mask]
+
+            def model_fn_mf(z: torch.Tensor) -> torch.Tensor:
+                unified = make_unified_flow_matching_input(z, t_mf)
                 return self._model(unified)
 
-            # Single forward pass + linearization (more efficient than jvp)
-            v_t, jvp_fn = torch.func.linearize(model_fn, z_t)
+            # First forward pass to get tangent vector
+            with torch.no_grad():
+                v_t_mf_tangent = model_fn_mf(z_t_mf)
 
-            # Compute JVP using v_t as tangent vector
-            jvp_result = jvp_fn(v_t)
-
-            # Compute MeanFlow target: u_tgt = v_t - (t - r) * jvp
-            delta_t = self._broadcast_time(t - r, v_t)
-            u_tgt_meanflow = v_t - delta_t * jvp_result
-
-            # For standard FM samples, target is just v_true
-            u_tgt = torch.where(
-                self._broadcast_time(use_meanflow.float(), v_r) > 0.5,
-                u_tgt_meanflow.detach(),  # Stop gradient on target
-                v_true,
+            # Second forward pass with JVP
+            v_t_mf, jvp_mf = torch.func.jvp(
+                model_fn_mf,
+                (z_t_mf,),
+                (v_t_mf_tangent,),
             )
+
+            # Compute MeanFlow target for these samples
+            delta_t_mf = self._broadcast_time(t_mf - r_mf, v_t_mf)
+            u_tgt_mf = v_t_mf - delta_t_mf * jvp_mf
+
+            # Build full target tensor: v_true for FM samples, u_tgt_mf for MeanFlow
+            u_tgt = v_true.clone()
+            u_tgt[mf_mask] = u_tgt_mf.detach()  # Stop gradient on target
         else:
             # All samples are standard FM
             u_tgt = v_true
