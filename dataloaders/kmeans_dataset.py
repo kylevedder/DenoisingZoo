@@ -3,7 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 import torch
 
-from dataloaders.base_dataloaders import BaseDataset, BaseItem, make_unified_input
+from dataloaders.base_dataloaders import (
+    BaseDataset,
+    BaseItem,
+    make_unified_flow_matching_input,
+)
 
 
 @dataclass
@@ -49,7 +53,9 @@ class GaussianKMeansDataset(BaseDataset):
         # target, irrespective of the time
         pred_target = y - x
 
-        unified = make_unified_input(x_t.unsqueeze(0), t.unsqueeze(0)).squeeze(0)
+        unified = make_unified_flow_matching_input(
+            x_t.unsqueeze(0), t.unsqueeze(0)
+        ).squeeze(0)
         return KMeansItem(
             raw_source=x,
             raw_target=pred_target,

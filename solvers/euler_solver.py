@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
-
 import numpy as np
 import torch
 
 from solvers.base_solver import BaseSolver, FlowSolveResult, VectorFieldModel
-from dataloaders.base_dataloaders import make_unified_input
+from dataloaders.base_dataloaders import make_unified_flow_matching_input
 
 
 class EulerSolver(BaseSolver):
@@ -38,7 +35,7 @@ class EulerSolver(BaseSolver):
         for t in t_schedule:
             # Compute velocity v(unified_input)
             t_tensor = torch.full((x.shape[0], 1), t, device=x.device, dtype=x.dtype)
-            unified = make_unified_input(x, t_tensor)
+            unified = make_unified_flow_matching_input(x, t_tensor)
             v = self._model(unified)
 
             # Euler update: x_{k+1} = x_k + dt * v(x_k, t_k)
