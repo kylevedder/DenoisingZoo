@@ -2,6 +2,7 @@ _target_: models.dit.dit.DiT
 input_size: 32
 patch_size: 2
 in_channels: 4
+time_channels: 2
 hidden_size: 1152
 depth: 28
 num_heads: 16

@@ -7,6 +7,7 @@ import torch
 import pytest
 
 from dataloaders.base_dataloaders import (
+    make_time_input,
     make_unified_flow_matching_input,
     make_ununified_flow_matching_input,
 )
@@ -113,16 +114,17 @@ class TestUnifiedInput:
         x = torch.randn(B, D)
         t = torch.rand(B, 1)
 
-        unified = make_unified_flow_matching_input(x, t)
+        time_input = make_time_input(t)
+        unified = make_unified_flow_matching_input(x, time_input)
 
-        # Should be (B, D+1)
-        assert unified.shape == (B, D + 1), f"Expected shape {(B, D+1)}, got {unified.shape}"
+        # Should be (B, D+2)
+        assert unified.shape == (B, D + 2), f"Expected shape {(B, D+2)}, got {unified.shape}"
 
         # Unpack
-        result = make_ununified_flow_matching_input(unified)
+        result = make_ununified_flow_matching_input(unified, num_time_channels=2)
 
         assert torch.allclose(result.x, x), "Unpacked x should match original"
-        assert torch.allclose(result.t, t), "Unpacked t should match original"
+        assert torch.allclose(result.t, time_input), "Unpacked t should match original"
 
     def test_pack_unpack_4d_roundtrip(self):
         """Pack and unpack 4D (image) input preserves values."""
@@ -132,16 +134,45 @@ class TestUnifiedInput:
         x = torch.randn(B, C, H, W)
         t = torch.rand(B, 1)
 
-        unified = make_unified_flow_matching_input(x, t)
+        time_input = make_time_input(t)
+        unified = make_unified_flow_matching_input(x, time_input)
 
-        # Should be (B, C+1, H, W)
-        assert unified.shape == (B, C + 1, H, W), f"Expected shape {(B, C+1, H, W)}, got {unified.shape}"
+        # Should be (B, C+2, H, W)
+        assert unified.shape == (B, C + 2, H, W), f"Expected shape {(B, C+2, H, W)}, got {unified.shape}"
 
         # Unpack
-        result = make_ununified_flow_matching_input(unified)
+        result = make_ununified_flow_matching_input(unified, num_time_channels=2)
 
         assert torch.allclose(result.x, x), "Unpacked x should match original"
-        assert torch.allclose(result.t, t, atol=1e-5), "Unpacked t should match original"
+        assert torch.allclose(result.t, time_input, atol=1e-5), "Unpacked t should match original"
+
+    def test_pack_unpack_4d_roundtrip_multi_time(self):
+        """Pack and unpack 4D input with multiple time channels."""
+        B = 4
+        C = 3
+        H = W = 16
+        x = torch.randn(B, C, H, W)
+        t = torch.rand(B, 2)
+
+        time_input = make_time_input(t)
+        unified = make_unified_flow_matching_input(x, time_input)
+        result = make_ununified_flow_matching_input(unified, num_time_channels=2)
+
+        assert torch.allclose(result.x, x), "Unpacked x should match original (multi-time)"
+        assert torch.allclose(result.t, t, atol=1e-5), "Unpacked t should match original (multi-time)"
+
+    def test_pack_unpack_2d_roundtrip_multi_time(self):
+        """Pack and unpack 2D input with multiple time channels."""
+        B = 4
+        D = 8
+        x = torch.randn(B, D)
+        t = torch.rand(B, 2)
+
+        unified = make_unified_flow_matching_input(x, t)
+        result = make_ununified_flow_matching_input(unified, num_time_channels=2)
+
+        assert torch.allclose(result.x, x), "Unpacked x should match original (2D multi-time)"
+        assert torch.allclose(result.t, t, atol=1e-5), "Unpacked t should match original (2D multi-time)"
 
     def test_time_channel_is_constant(self):
         """Time channel in 4D unified input should be spatially constant."""
@@ -151,17 +182,20 @@ class TestUnifiedInput:
         x = torch.randn(B, C, H, W)
         t = torch.rand(B, 1)
 
-        unified = make_unified_flow_matching_input(x, t)
+        time_input = make_time_input(t)
+        unified = make_unified_flow_matching_input(x, time_input)
 
         # Extract time channel
-        t_channel = unified[:, -1, :, :]  # (B, H, W)
+        t_channel = unified[:, -2:, :, :]  # (B, 2, H, W)
 
         # Should be constant across spatial dimensions
         for b in range(B):
-            t_slice = t_channel[b]  # (H, W)
-            assert torch.allclose(
-                t_slice, t[b, 0].expand(H, W)
-            ), f"Time channel should be constant for batch {b}"
+            for idx in range(t_channel.shape[1]):
+                t_slice = t_channel[b, idx]  # (H, W)
+                expected = t[b, 0] if idx == 0 else t.new_tensor(1.0)
+                assert torch.allclose(
+                    t_slice, expected.expand(H, W)
+                ), f"Time channel {idx} should be constant for batch {b}"
 
     def test_batch_size_mismatch_raises(self):
         """Mismatched batch sizes should raise ValueError."""
@@ -169,7 +203,8 @@ class TestUnifiedInput:
         t = torch.rand(2, 1)  # Different batch size
 
         with pytest.raises(ValueError, match="Batch size mismatch"):
-            make_unified_flow_matching_input(x, t)
+            time_input = make_time_input(t)
+            make_unified_flow_matching_input(x, time_input)
 
     def test_unsupported_dimension_raises(self):
         """Unsupported tensor dimensions should raise ValueError."""
@@ -177,7 +212,8 @@ class TestUnifiedInput:
         t = torch.rand(4, 1)
 
         with pytest.raises(ValueError, match="Unsupported"):
-            make_unified_flow_matching_input(x, t)
+            time_input = make_time_input(t)
+            make_unified_flow_matching_input(x, time_input)
 
 
 class TestEdgeCases:

@@ -7,16 +7,24 @@ import torch
 import torch.nn as nn
 import pytest
 
-from dataloaders.base_dataloaders import make_unified_flow_matching_input
+from dataloaders.base_dataloaders import (
+    make_time_input,
+    make_unified_flow_matching_input,
+)
 
 
 class SimpleModel(nn.Module):
     """Simple model for testing."""
 
-    def __init__(self, channels: int = 3, hidden: int = 32):
+    def __init__(self, channels: int = 3, hidden: int = 32, time_channels: int = 2):
         super().__init__()
+        if time_channels < 1:
+            raise ValueError("time_channels must be >= 1")
+        self.time_channels = time_channels
         self.net = nn.Sequential(
-            nn.Conv2d(channels + 1, hidden, 3, padding=1),  # +1 for time channel
+            nn.Conv2d(
+                channels + time_channels, hidden, 3, padding=1
+            ),  # +T for time channels
             nn.ReLU(),
             nn.Conv2d(hidden, channels, 3, padding=1),
         )
@@ -48,12 +56,6 @@ class TestREqualsT:
 
         # At r = t, z_r = z_t, so the model sees the same input
         # The target is just v_true
-        t = torch.rand(B, 1)
-        r = t.clone()  # r = t
-
-        t_b = t.view(B, 1, 1, 1)
-        z_t = (1 - t_b) * x + t_b * y
-
         # For standard FM (r=t), target is v_true
         target = v_true
 
@@ -67,7 +69,7 @@ class TestREqualsT:
         C = 3
         H = W = 16
 
-        model = SimpleModel(channels=C)
+        model = SimpleModel(channels=C, time_channels=2)
         model.eval()
 
         x = torch.randn(B, C, H, W)
@@ -78,7 +80,8 @@ class TestREqualsT:
         t_b = t.view(B, 1, 1, 1)
         z_t = (1 - t_b) * x + t_b * y
 
-        unified = make_unified_flow_matching_input(z_t, t)
+        time_input = make_time_input(t)
+        unified = make_unified_flow_matching_input(z_t, time_input)
 
         with torch.no_grad():
             v_pred = model(unified)
@@ -101,7 +104,7 @@ class TestMeanFlowTarget:
         C = 3
         H = W = 8
 
-        model = SimpleModel(channels=C, hidden=16)
+        model = SimpleModel(channels=C, hidden=16, time_channels=2)
         model.eval()
 
         x = torch.randn(B, C, H, W)
@@ -112,22 +115,20 @@ class TestMeanFlowTarget:
         r = torch.rand(B, 1) * t  # r in [0, t]
 
         t_b = t.view(B, 1, 1, 1)
-        r_b = r.view(B, 1, 1, 1)
-
         z_t = (1 - t_b) * x + t_b * y
-        z_r = (1 - r_b) * x + r_b * y
 
-        # Get v_t first
-        unified_t = make_unified_flow_matching_input(z_t, t)
+        # Get v_t first (r=t)
+        time_vt = make_time_input(t, time_channels=2)
+        unified_t = make_unified_flow_matching_input(z_t, time_vt)
         with torch.no_grad():
             v_t_initial = model(unified_t)
 
-        # Compute JVP
-        def model_fn(z, t_val):
-            unified = make_unified_flow_matching_input(z, t_val)
+        # Compute JVP (full: v·∂v/∂z + ∂v/∂t)
+        def model_fn(z: torch.Tensor, t_val: torch.Tensor) -> torch.Tensor:
+            time_input = make_time_input(t_val, time_channels=2)
+            unified = make_unified_flow_matching_input(z, time_input)
             return model(unified)
 
-        v_t_initial = model_fn(z_t, t)
         tangent_t = torch.ones_like(t)
 
         v_t, jvp_result = torch.func.jvp(
@@ -145,8 +146,9 @@ class TestMeanFlowTarget:
 
         # Verify it's different from v_t when r != t
         if not torch.allclose(t, r):
-            assert not torch.allclose(u_tgt, v_t), \
+            assert not torch.allclose(u_tgt, v_t), (
                 "MeanFlow target should differ from v_t when r != t"
+            )
 
     def test_meanflow_target_at_r0_t1(self):
         """Test MeanFlow target at r=0, t=1 (full integration case)."""
@@ -155,7 +157,7 @@ class TestMeanFlowTarget:
         C = 3
         H = W = 8
 
-        model = SimpleModel(channels=C, hidden=16)
+        model = SimpleModel(channels=C, hidden=16, time_channels=2)
         model.eval()
 
         x = torch.randn(B, C, H, W)
@@ -174,17 +176,18 @@ class TestMeanFlowTarget:
         assert torch.allclose(z_t, y), "z_t should equal y at t=1"
         assert torch.allclose(z_r, x), "z_r should equal x at r=0"
 
-        # Get v_t
-        unified_t = make_unified_flow_matching_input(z_t, t)
+        # Get v_t (r=t)
+        time_vt = make_time_input(t, time_channels=2)
+        unified_t = make_unified_flow_matching_input(z_t, time_vt)
         with torch.no_grad():
             v_t_initial = model(unified_t)
 
-        # Compute JVP
-        def model_fn(z, t_val):
-            unified = make_unified_flow_matching_input(z, t_val)
+        # Compute JVP (full: v·∂v/∂z + ∂v/∂t)
+        def model_fn(z: torch.Tensor, t_val: torch.Tensor) -> torch.Tensor:
+            time_input = make_time_input(t_val, time_channels=2)
+            unified = make_unified_flow_matching_input(z, time_input)
             return model(unified)
 
-        v_t_initial = model_fn(z_t, t)
         tangent_t = torch.ones_like(t)
 
         v_t, jvp_result = torch.func.jvp(
@@ -211,7 +214,7 @@ class TestGradientFlow:
         C = 3
         H = W = 8
 
-        model = SimpleModel(channels=C, hidden=16)
+        model = SimpleModel(channels=C, hidden=16, time_channels=2)
         model.train()
 
         x = torch.randn(B, C, H, W)
@@ -223,16 +226,17 @@ class TestGradientFlow:
         t_b = t.view(B, 1, 1, 1)
         z_t = (1 - t_b) * x + t_b * y
 
-        # Get v_t first (with no_grad for the target computation)
-        unified_t = make_unified_flow_matching_input(z_t, t)
+        # Get v_t first (with no_grad for the target computation, r=t)
+        time_vt = make_time_input(t, time_channels=2)
+        unified_t = make_unified_flow_matching_input(z_t, time_vt)
         with torch.no_grad():
             v_t_initial = model(unified_t)
 
-        def model_fn(z, t_val):
-            unified = make_unified_flow_matching_input(z, t_val)
+        def model_fn(z: torch.Tensor, t_val: torch.Tensor) -> torch.Tensor:
+            time_input = make_time_input(t_val, time_channels=2)
+            unified = make_unified_flow_matching_input(z, time_input)
             return model(unified)
 
-        v_t_initial = model_fn(z_t, t)
         tangent_t = torch.ones_like(t)
 
         v_t, jvp_result = torch.func.jvp(
@@ -247,8 +251,9 @@ class TestGradientFlow:
         # Detach target for loss computation
         u_tgt_detached = u_tgt.detach()
 
-        assert not u_tgt_detached.requires_grad, \
+        assert not u_tgt_detached.requires_grad, (
             "Detached target should not require grad"
+        )
 
     def test_loss_gradients_flow_to_model(self):
         """Gradients from loss should flow to model parameters."""
@@ -257,7 +262,7 @@ class TestGradientFlow:
         C = 3
         H = W = 8
 
-        model = SimpleModel(channels=C, hidden=16)
+        model = SimpleModel(channels=C, hidden=16, time_channels=2)
         model.train()
 
         x = torch.randn(B, C, H, W)
@@ -267,11 +272,11 @@ class TestGradientFlow:
         t = torch.rand(B, 1)
         r = torch.rand(B, 1) * t
 
-        t_b = t.view(B, 1, 1, 1)
         r_b = r.view(B, 1, 1, 1)
         z_r = (1 - r_b) * x + r_b * y
 
-        unified_r = make_unified_flow_matching_input(z_r, r)
+        time_input = make_time_input(r)
+        unified_r = make_unified_flow_matching_input(z_r, time_input)
         v_r = model(unified_r)
 
         # Simple loss (not full MeanFlow, just testing gradient flow)
@@ -310,8 +315,9 @@ class TestVelocityFieldProperties:
             # Integrate velocity from t to 1
             z_1 = z_t + (1 - t_b) * v
 
-            assert torch.allclose(z_1, y, atol=1e-6), \
+            assert torch.allclose(z_1, y, atol=1e-6), (
                 f"Integrating velocity should reach y, failed at t={t_val}"
+            )
 
 
 if __name__ == "__main__":

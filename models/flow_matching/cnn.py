@@ -23,6 +23,7 @@ class SmallCNN(nn.Module):
         base_channels: int = 64,
         num_layers: int = 4,
         kernel_size: int = 3,
+        time_channels: int = 2,
     ) -> None:
         super().__init__()
         if out_channels is None:
@@ -30,12 +31,16 @@ class SmallCNN(nn.Module):
 
         if num_layers < 2:
             raise ValueError("num_layers must be >= 2")
+        if time_channels < 1:
+            raise ValueError("time_channels must be >= 1")
 
         padding = kernel_size // 2
         layers: list[nn.Module] = []
 
-        # First layer takes time channel as an extra input
-        current_in = in_channels + 1
+        self.time_channels = time_channels
+
+        # First layer takes time channels as extra input
+        current_in = in_channels + time_channels
         current_out = base_channels
         layers.append(nn.Conv2d(current_in, current_out, kernel_size, padding=padding))
         layers.append(nn.ReLU(inplace=True))

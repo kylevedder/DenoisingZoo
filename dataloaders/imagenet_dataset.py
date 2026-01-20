@@ -17,6 +17,7 @@ from torchvision import datasets, transforms  # type: ignore[import]
 from dataloaders.base_dataloaders import (
     BaseDataset,
     BaseItem,
+    make_time_input,
     make_unified_flow_matching_input,
 )
 
@@ -135,8 +136,9 @@ class ImageNetDataset(BaseDataset):
             if torch.rand(1, generator=self._rng).item() < self._label_dropout:
                 label = self._null_label
 
+        time_input = make_time_input(t.unsqueeze(0))
         unified = make_unified_flow_matching_input(
-            x_t.unsqueeze(0), t.unsqueeze(0)
+            x_t.unsqueeze(0), time_input
         ).squeeze(0)
 
         return ImageNetItem(
@@ -280,8 +282,9 @@ class ImageNetLatentDataset(BaseDataset):
             if torch.rand(1, generator=self._rng).item() < self._label_dropout:
                 label = self._null_label
 
+        time_input = make_time_input(t.unsqueeze(0))
         unified = make_unified_flow_matching_input(
-            x_t.unsqueeze(0), t.unsqueeze(0)
+            x_t.unsqueeze(0), time_input
         ).squeeze(0)
 
         return ImageNetItem(

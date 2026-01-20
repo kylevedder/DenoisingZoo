@@ -2,6 +2,7 @@ _target_: models.unet.unet.UNet
 in_channels: 3
 out_channels: 3
 base_channels: 128
+time_channels: 2
 channel_mult: [1, 2, 2, 2]
 num_res_blocks: 3
 attention_resolutions: [16, 8]

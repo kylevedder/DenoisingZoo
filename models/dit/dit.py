@@ -249,6 +249,7 @@ class DiT(nn.Module):
         input_size: int = 32,
         patch_size: int = 2,
         in_channels: int = 4,
+        time_channels: int = 2,
         hidden_size: int = 1152,
         depth: int = 28,
         num_heads: int = 16,
@@ -258,16 +259,19 @@ class DiT(nn.Module):
         class_dropout_prob: float = 0.1,
     ) -> None:
         super().__init__()
+        if time_channels < 1:
+            raise ValueError("time_channels must be >= 1")
         self.input_size = input_size
         self.patch_size = patch_size
         self.in_channels = in_channels
+        self.time_channels = time_channels
         self.out_channels = in_channels * 2 if learn_sigma else in_channels
         self.num_heads = num_heads
         self.hidden_size = hidden_size
 
         # Patch embedding
         self.x_embedder = nn.Conv2d(
-            in_channels + 1,  # +1 for time channel from unified input
+            in_channels + time_channels,  # +T for time channels from unified input
             hidden_size,
             kernel_size=patch_size,
             stride=patch_size,
@@ -355,15 +359,17 @@ class DiT(nn.Module):
         """Forward pass.
 
         Args:
-            unified_input: Input tensor (B, C+1, H, W) with time channel
+            unified_input: Input tensor (B, C+T, H, W) with time channels
             y: Class labels (B,) - optional, if None uses null class
 
         Returns:
             Velocity field (B, C, H, W)
         """
         # Extract time from unified input
-        ununified = make_ununified_flow_matching_input(unified_input)
-        t = ununified.t.squeeze(-1)  # (B,)
+        ununified = make_ununified_flow_matching_input(
+            unified_input, num_time_channels=self.time_channels
+        )
+        t = ununified.t  # (B, T)
 
         B = unified_input.shape[0]
 
@@ -375,7 +381,15 @@ class DiT(nn.Module):
         x = x + self.pos_embed
 
         # Get time embedding
-        t_emb = self.t_embedder(t)  # (B, hidden_size)
+        if t.dim() == 1:
+            t = t.unsqueeze(-1)
+        if t.shape[1] == 1:
+            t_emb = self.t_embedder(t.squeeze(-1))
+        else:
+            t_emb = None
+            for idx in range(t.shape[1]):
+                emb = self.t_embedder(t[:, idx])
+                t_emb = emb if t_emb is None else t_emb + emb
 
         # Get label embedding
         if y is None:

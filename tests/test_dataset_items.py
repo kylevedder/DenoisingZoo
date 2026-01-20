@@ -17,7 +17,7 @@ class TestDatasetItemInstantiation:
             input=torch.zeros(3, 32, 32),
             t=torch.tensor([0.5]),
             target=torch.zeros(3, 32, 32),
-            unified_input=torch.zeros(4, 32, 32),
+            unified_input=torch.zeros(5, 32, 32),
             raw_source=torch.zeros(3, 32, 32),
             raw_target=torch.zeros(3, 32, 32),
         )
@@ -30,7 +30,7 @@ class TestDatasetItemInstantiation:
             input=torch.zeros(3, 64, 64),
             t=torch.tensor([0.5]),
             target=torch.zeros(3, 64, 64),
-            unified_input=torch.zeros(4, 64, 64),
+            unified_input=torch.zeros(5, 64, 64),
             raw_source=torch.zeros(3, 64, 64),
             raw_target=torch.zeros(3, 64, 64),
         )
@@ -43,7 +43,7 @@ class TestDatasetItemInstantiation:
             input=torch.zeros(4, 32, 32),
             t=torch.tensor([0.5]),
             target=torch.zeros(4, 32, 32),
-            unified_input=torch.zeros(5, 32, 32),
+            unified_input=torch.zeros(6, 32, 32),
             raw_source=torch.zeros(4, 32, 32),
             raw_target=torch.zeros(4, 32, 32),
             label=0,
@@ -58,7 +58,7 @@ class TestDatasetItemInstantiation:
             input=torch.zeros(3, 32, 32),
             t=torch.tensor([0.5]),
             target=torch.zeros(3, 32, 32),
-            unified_input=torch.zeros(4, 32, 32),
+            unified_input=torch.zeros(5, 32, 32),
             raw_source=torch.zeros(3, 32, 32),
             raw_target=torch.zeros(3, 32, 32),
             label=0,
@@ -72,7 +72,7 @@ class TestDatasetItemInstantiation:
             input=torch.zeros(2),
             t=torch.tensor([0.5]),
             target=torch.zeros(2),
-            unified_input=torch.zeros(3),
+            unified_input=torch.zeros(4),
             raw_source=torch.zeros(2),
             raw_target=torch.zeros(2),
         )
@@ -85,7 +85,7 @@ class TestDatasetItemInstantiation:
             input=torch.zeros(3, 64, 64),
             t=torch.tensor([0.5]),
             target=torch.zeros(3, 64, 64),
-            unified_input=torch.zeros(4, 64, 64),
+            unified_input=torch.zeros(5, 64, 64),
             raw_source=torch.zeros(3, 64, 64),
             raw_target=torch.zeros(3, 64, 64),
         )

@@ -121,8 +121,10 @@ cd visualizers && ./vis_all.sh
 
 ### Unified Input Pattern
 All models receive state and time fused into a single tensor:
-- Dense data: `(B, D)` + `(B, 1)` → `(B, D+1)` (time concatenated as feature)
-- Images: `(B, C, H, W)` + `(B, 1)` → `(B, C+1, H, W)` (time as extra channel)
+- Dense data: `(B, D)` + `(B, 2)` → `(B, D+2)` (time concatenated as features)
+- Images: `(B, C, H, W)` + `(B, 2)` → `(B, C+2, H, W)` (time as extra channels)
+
+For standard flow matching, the second time input is fixed to `1`.
 
 Implementation: `dataloaders/base_dataloaders.py::make_unified_flow_matching_input()`
 
@@ -145,8 +147,8 @@ MeanFlow enables one-step generation by learning mean velocity fields:
 # Standard flow matching requires ODE integration
 x = solver.solve(noise)  # Multiple NFEs
 
-# MeanFlow: single forward pass
-x = noise - model(noise, t=1)  # 1 NFE
+# MeanFlow: single forward pass (u(z, r, t) with r=0, t=1)
+x = noise + model(noise, r=0, t=1)  # 1 NFE
 ```
 
 Key files:

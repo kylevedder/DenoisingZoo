@@ -20,9 +20,13 @@ class MLP(nn.Module):
         self,
         feature_dim: int,
         hidden_dim: int = 256,
+        time_channels: int = 2,
     ) -> None:
         super().__init__()
-        input_dim = feature_dim + 1  # concatenate time `t`
+        if time_channels < 1:
+            raise ValueError("time_channels must be >= 1")
+        self.time_channels = time_channels
+        input_dim = feature_dim + time_channels  # concatenate time inputs
         self.net = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU(),

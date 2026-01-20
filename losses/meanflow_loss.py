@@ -6,18 +6,20 @@ Enables single-step generation by learning the mean velocity field.
 
 from __future__ import annotations
 
-from typing import Callable, Any
 import torch
 from torch import nn
 import torch.nn.functional as F
 
-from dataloaders.base_dataloaders import make_unified_flow_matching_input
+from dataloaders.base_dataloaders import (
+    make_time_input,
+    make_unified_flow_matching_input,
+)
 
 
 class MeanFlowLoss(nn.Module):
     """MeanFlow loss for training mean velocity field models.
 
-    Key idea: Train v(z, r, t) to predict the mean velocity from time r to t,
+    Key idea: Train u(z_t, r, t) to predict the mean velocity from time r to t,
     enabling one-step generation by setting r=0, t=1.
 
     Args:
@@ -106,27 +108,26 @@ class MeanFlowLoss(nn.Module):
         r_uniform = torch.rand(B, 1, device=x.device, dtype=dtype) * t
         r = torch.where(use_meanflow, r_uniform, t)
 
-        # Compute interpolated states
-        # z_t = (1 - t) * x + t * y
-        # z_r = (1 - r) * x + r * y
-        t_b = self._broadcast_time(t, x)
-        r_b = self._broadcast_time(r, x)
+        time_channels = int(getattr(self._model, "time_channels", 2))
+        if self.meanflow_ratio > 0 and time_channels < 2:
+            raise RuntimeError(
+                "MeanFlow requires model.time_channels >= 2 to provide (r, t) conditioning."
+            )
 
+        # Compute interpolated state at time t
+        # z_t = (1 - t) * x + t * y
+        t_b = self._broadcast_time(t, x)
         z_t = (1 - t_b) * x + t_b * y
-        z_r = (1 - r_b) * x + r_b * y
 
         # Ground truth velocity
         v_true = y - x
 
         # Compute model predictions
-        unified_t = make_unified_flow_matching_input(z_t, t)
-        unified_r = make_unified_flow_matching_input(z_r, r)
+        time_pred = make_time_input(t, r=r, time_channels=time_channels)
+        unified_t = make_unified_flow_matching_input(z_t, time_pred)
 
-        # For standard FM (r = t), we just need v_t
-        # For MeanFlow (r != t), we need v_r and JVP of v_t
-
-        # Always compute v_r (prediction at time r)
-        v_r = self._model(unified_r)
+        # Always compute u(z_t, r, t)
+        v_pred = self._model(unified_t)
 
         # Compute target for MeanFlow samples
         # From paper Eq. 6: u = v_t - (t - r) * du/dt
@@ -147,7 +148,10 @@ class MeanFlowLoss(nn.Module):
             r_mf = r[mf_mask]
 
             def model_fn_mf(z: torch.Tensor, t_input: torch.Tensor) -> torch.Tensor:
-                unified = make_unified_flow_matching_input(z, t_input)
+                time_input = make_time_input(
+                    t_input, r=t_input, time_channels=time_channels
+                )
+                unified = make_unified_flow_matching_input(z, time_input)
                 return self._model(unified)
 
             # First forward pass to get tangent vector for z
@@ -175,15 +179,17 @@ class MeanFlowLoss(nn.Module):
             u_tgt = v_true
 
         # Compute loss with adaptive weighting
-        diff = v_r - u_tgt
+        diff = v_pred - u_tgt
         sq_error = (diff ** 2).flatten(1).sum(dim=1)  # (B,)
 
         # Adaptive weighting: w = 1 / (||delta||² + c)^p
-        # where delta = u_tgt - v_true (or just use a simpler scheme)
+        # where delta = u_tgt - v_true
         if self.weighting_power > 0:
-            # Weight based on squared error magnitude (self-pacing)
+            # Weight based on the MeanFlow correction magnitude
             with torch.no_grad():
-                weights = 1.0 / (sq_error.detach() + self.weighting_const) ** self.weighting_power
+                delta = (u_tgt.detach() - v_true).flatten(1)
+                delta_sq = (delta ** 2).sum(dim=1)
+                weights = 1.0 / (delta_sq + self.weighting_const) ** self.weighting_power
                 weights = weights / weights.mean()  # Normalize to preserve scale
         else:
             weights = torch.ones(B, device=x.device, dtype=dtype)

@@ -4,7 +4,10 @@ import numpy as np
 import torch
 
 from solvers.base_solver import BaseSolver, FlowSolveResult, VectorFieldModel
-from dataloaders.base_dataloaders import make_unified_flow_matching_input
+from dataloaders.base_dataloaders import (
+    make_time_input,
+    make_unified_flow_matching_input,
+)
 
 
 class EulerSolver(BaseSolver):
@@ -25,6 +28,7 @@ class EulerSolver(BaseSolver):
         initial_state: torch.Tensor,
     ) -> FlowSolveResult:
         x = initial_state
+        time_channels = int(getattr(self._model, "time_channels", 2))
 
         dt = float(self._t_end - self._t_start) / float(self._num_steps)
         t_schedule = np.linspace(self._t_start, self._t_end, self._num_steps + 1)
@@ -35,7 +39,8 @@ class EulerSolver(BaseSolver):
         for t in t_schedule:
             # Compute velocity v(unified_input)
             t_tensor = torch.full((x.shape[0], 1), t, device=x.device, dtype=x.dtype)
-            unified = make_unified_flow_matching_input(x, t_tensor)
+            time_input = make_time_input(t_tensor, time_channels=time_channels)
+            unified = make_unified_flow_matching_input(x, time_input)
             v = self._model(unified)
 
             # Euler update: x_{k+1} = x_k + dt * v(x_k, t_k)

@@ -181,6 +181,7 @@ class UNet(nn.Module):
         in_channels: int = 3,
         out_channels: int | None = None,
         base_channels: int = 128,
+        time_channels: int = 2,
         channel_mult: Sequence[int] = (1, 2, 2, 2),
         num_res_blocks: int = 2,
         attention_resolutions: Sequence[int] = (16,),
@@ -192,10 +193,13 @@ class UNet(nn.Module):
 
         if out_channels is None:
             out_channels = in_channels
+        if time_channels < 1:
+            raise ValueError("time_channels must be >= 1")
 
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.base_channels = base_channels
+        self.time_channels = time_channels
         self.channel_mult = list(channel_mult)
         self.num_res_blocks = num_res_blocks
         self.attention_resolutions = set(attention_resolutions)
@@ -211,7 +215,9 @@ class UNet(nn.Module):
         )
 
         # Input projection (accounts for time channel in unified input)
-        self.input_conv = nn.Conv2d(in_channels + 1, base_channels, 3, padding=1)
+        self.input_conv = nn.Conv2d(
+            in_channels + time_channels, base_channels, 3, padding=1
+        )
 
         # Track channels at each skip connection point
         self._skip_channels: list[int] = []
@@ -312,8 +318,8 @@ class UNet(nn.Module):
         """Forward pass.
 
         Args:
-            unified_input: Input tensor of shape (B, C+1, H, W) where
-                the last channel is the time embedding.
+            unified_input: Input tensor of shape (B, C+T, H, W) where
+                the last T channels are time inputs.
 
         Returns:
             Velocity field of shape (B, C, H, W)
@@ -324,12 +330,13 @@ class UNet(nn.Module):
             )
 
         # Extract time from unified input
-        ununified = make_ununified_flow_matching_input(unified_input)
-        t = ununified.t  # (B, 1)
+        ununified = make_ununified_flow_matching_input(
+            unified_input, num_time_channels=self.time_channels
+        )
+        t = ununified.t  # (B, T)
 
         # Time embedding
-        t_emb = sinusoidal_embedding(t, self.base_channels)
-        t_emb = self.time_embed(t_emb)
+        t_emb = self._build_time_embedding(t)
 
         # Initial convolution (on full unified input including time channel)
         h = self.input_conv(unified_input)
@@ -377,3 +384,15 @@ class UNet(nn.Module):
         h = self.out_conv(h)
 
         return h
+
+    def _build_time_embedding(self, t: torch.Tensor) -> torch.Tensor:
+        if t.dim() == 1:
+            t = t.unsqueeze(-1)
+        if t.shape[1] == 1:
+            base = sinusoidal_embedding(t, self.base_channels)
+        else:
+            base = None
+            for idx in range(t.shape[1]):
+                emb = sinusoidal_embedding(t[:, idx], self.base_channels)
+                base = emb if base is None else base + emb
+        return self.time_embed(base)

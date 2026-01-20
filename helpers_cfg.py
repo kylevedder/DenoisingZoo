@@ -8,11 +8,13 @@ where w is the guidance scale.
 
 from __future__ import annotations
 
-from typing import Callable
 import torch
 from torch import nn
 
-from dataloaders.base_dataloaders import make_unified_flow_matching_input
+from dataloaders.base_dataloaders import (
+    make_time_input,
+    make_unified_flow_matching_input,
+)
 
 
 def cfg_sample_step(
@@ -22,13 +24,14 @@ def cfg_sample_step(
     labels: torch.Tensor,
     guidance_scale: float = 1.0,
     null_label: int = 1000,
+    r: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Compute CFG-guided velocity at time t.
 
     Args:
         model: Model that takes (unified_input, labels) -> velocity
         x: Current state (B, C, H, W)
-        t: Time tensor (B,) or (B, 1)
+        t: Time tensor (B,), (B, 1), or (B, 2)
         labels: Class labels (B,)
         guidance_scale: CFG scale w (default: 1.0 = no guidance)
         null_label: Label value for unconditional (default: 1000)
@@ -36,14 +39,16 @@ def cfg_sample_step(
     Returns:
         CFG-weighted velocity (B, C, H, W)
     """
-    B = x.shape[0]
-    device = x.device
+    time_channels = int(getattr(model, "time_channels", 2))
 
     if t.dim() == 1:
         t = t.unsqueeze(-1)
+    if r is not None and r.dim() == 1:
+        r = r.unsqueeze(-1)
 
     # Create unified input
-    unified = make_unified_flow_matching_input(x, t)
+    time_input = make_time_input(t, r=r, time_channels=time_channels)
+    unified = make_unified_flow_matching_input(x, time_input)
 
     if guidance_scale == 1.0:
         # No guidance needed - just conditional
@@ -88,7 +93,10 @@ class CFGWrapper(nn.Module):
         """Forward with CFG applied."""
         from dataloaders.base_dataloaders import make_ununified_flow_matching_input
 
-        ununified = make_ununified_flow_matching_input(unified_input)
+        time_channels = int(getattr(self.model, "time_channels", 2))
+        ununified = make_ununified_flow_matching_input(
+            unified_input, num_time_channels=time_channels
+        )
         x = ununified.x
         t = ununified.t
 
@@ -167,7 +175,7 @@ def generate_samples_meanflow_cfg(
 ) -> torch.Tensor:
     """Generate samples with CFG using single-step MeanFlow.
 
-    MeanFlow 1-NFE generation: x = z + (t - r) * v_cfg(z, r)
+    MeanFlow 1-NFE generation: x = z + (t - r) * u_cfg(z, r, t)
 
     Args:
         model: Class-conditional MeanFlow model
@@ -194,11 +202,23 @@ def generate_samples_meanflow_cfg(
     z = torch.randn((B, *sample_shape), device=device, generator=rng)
 
     # Create time tensor
-    time_tensor = torch.full((B, 1), r, device=device, dtype=z.dtype)
+    time_channels = int(getattr(model, "time_channels", 2))
+    if time_channels < 2:
+        raise ValueError(
+            "MeanFlow CFG sampling requires model.time_channels >= 2 to provide (r, t)."
+        )
+    r_tensor = torch.full((B, 1), r, device=device, dtype=z.dtype)
+    t_tensor = torch.full((B, 1), t, device=device, dtype=z.dtype)
 
     # Get CFG velocity
     v_cfg = cfg_sample_step(
-        model, z, time_tensor, labels, guidance_scale, null_label
+        model,
+        z,
+        t_tensor,
+        labels,
+        guidance_scale=guidance_scale,
+        null_label=null_label,
+        r=r_tensor,
     )
 
     # Single-step generation

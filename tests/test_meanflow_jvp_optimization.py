@@ -12,7 +12,10 @@ import torch
 import torch.nn as nn
 from torch.func import jvp
 
-from dataloaders.base_dataloaders import make_unified_flow_matching_input
+from dataloaders.base_dataloaders import (
+    make_time_input,
+    make_unified_flow_matching_input,
+)
 
 
 class SimpleMLP(nn.Module):
@@ -35,10 +38,13 @@ class SimpleMLP(nn.Module):
 class SimpleCNN(nn.Module):
     """Simple CNN for testing."""
 
-    def __init__(self, in_channels: int, hidden_channels: int):
+    def __init__(self, in_channels: int, hidden_channels: int, time_channels: int = 2):
         super().__init__()
+        if time_channels < 1:
+            raise ValueError("time_channels must be >= 1")
+        self.time_channels = time_channels
         self.net = nn.Sequential(
-            nn.Conv2d(in_channels + 1, hidden_channels, 3, padding=1),
+            nn.Conv2d(in_channels + time_channels, hidden_channels, 3, padding=1),
             nn.SiLU(),
             nn.Conv2d(hidden_channels, hidden_channels, 3, padding=1),
             nn.SiLU(),
@@ -53,7 +59,8 @@ def compute_jvp(model, z_t, t):
     """Compute full JVP: v·∂v/∂z + ∂v/∂t (paper Eq. 8)."""
 
     def model_fn(z: torch.Tensor, t_input: torch.Tensor) -> torch.Tensor:
-        unified = make_unified_flow_matching_input(z, t_input)
+        time_input = make_time_input(t_input)
+        unified = make_unified_flow_matching_input(z, time_input)
         return model(unified)
 
     with torch.no_grad():
@@ -73,7 +80,8 @@ def compute_jvp_finite_diff(model, z_t, t, eps=1e-4):
     """Finite difference reference for full JVP."""
 
     def model_fn(z: torch.Tensor, t_val: torch.Tensor) -> torch.Tensor:
-        unified = make_unified_flow_matching_input(z, t_val)
+        time_input = make_time_input(t_val)
+        unified = make_unified_flow_matching_input(z, time_input)
         return model(unified)
 
     with torch.no_grad():
@@ -96,7 +104,7 @@ class TestJVPCorrectness:
     def test_mlp_jvp_vs_finite_diff(self):
         """Verify JVP matches finite differences for MLP."""
         torch.manual_seed(42)
-        model = SimpleMLP(in_dim=3, hidden_dim=32, out_dim=2)
+        model = SimpleMLP(in_dim=4, hidden_dim=32, out_dim=2)
         z_t = torch.randn(8, 2)
         t = torch.rand(8, 1) * 0.8 + 0.1
 
@@ -109,7 +117,7 @@ class TestJVPCorrectness:
     def test_cnn_jvp_vs_finite_diff(self):
         """Verify JVP matches finite differences for CNN."""
         torch.manual_seed(42)
-        model = SimpleCNN(in_channels=3, hidden_channels=16)
+        model = SimpleCNN(in_channels=3, hidden_channels=16, time_channels=2)
         z_t = torch.randn(4, 3, 8, 8)
         t = torch.rand(4, 1) * 0.8 + 0.1
 
@@ -122,14 +130,15 @@ class TestJVPCorrectness:
     def test_time_derivative_is_nonzero(self):
         """Verify ∂v/∂t contributes to JVP (not just ∂v/∂z)."""
         torch.manual_seed(42)
-        model = SimpleCNN(in_channels=3, hidden_channels=16)
+        model = SimpleCNN(in_channels=3, hidden_channels=16, time_channels=2)
         model.eval()
         z_t = torch.randn(4, 3, 8, 8)
         t = torch.rand(4, 1) * 0.5 + 0.25
 
         # Compute ∂v/∂t separately
         def model_fn(z, t_val):
-            return model(make_unified_flow_matching_input(z, t_val))
+            time_input = make_time_input(t_val)
+            return model(make_unified_flow_matching_input(z, time_input))
 
         with torch.no_grad():
             eps = 1e-4
@@ -140,7 +149,7 @@ class TestJVPCorrectness:
     def test_gradient_flow(self):
         """Verify gradients flow through JVP."""
         torch.manual_seed(42)
-        model = SimpleMLP(in_dim=3, hidden_dim=32, out_dim=2)
+        model = SimpleMLP(in_dim=4, hidden_dim=32, out_dim=2)
         z_t = torch.randn(4, 2, requires_grad=True)
         t = torch.rand(4, 1) * 0.8 + 0.1
 
@@ -156,7 +165,7 @@ class TestJVPCorrectness:
         from losses.meanflow_loss import MeanFlowLoss
 
         torch.manual_seed(42)
-        model = SimpleCNN(in_channels=3, hidden_channels=16)
+        model = SimpleCNN(in_channels=3, hidden_channels=16, time_channels=2)
         loss_fn = MeanFlowLoss(model=model, meanflow_ratio=1.0)
 
         batch = {

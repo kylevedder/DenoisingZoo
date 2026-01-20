@@ -10,6 +10,7 @@ from torch.utils.data import Subset
 from dataloaders.base_dataloaders import (
     BaseDataset,
     BaseItem,
+    make_time_input,
     make_unified_flow_matching_input,
 )
 
@@ -102,8 +103,9 @@ class CelebADataset(BaseDataset):
         x_t = x * (1 - t) + y * t
         v = y - x
 
+        time_input = make_time_input(t.unsqueeze(0))
         unified = make_unified_flow_matching_input(
-            x_t.unsqueeze(0), t.unsqueeze(0)
+            x_t.unsqueeze(0), time_input
         ).squeeze(0)
         return CelebAItem(
             raw_source=x, raw_target=y, t=t, input=x_t, target=v, unified_input=unified

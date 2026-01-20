@@ -4,7 +4,10 @@ import numpy as np
 import torch
 
 from solvers.base_solver import BaseSolver, FlowSolveResult, VectorFieldModel
-from dataloaders.base_dataloaders import make_unified_flow_matching_input
+from dataloaders.base_dataloaders import (
+    make_time_input,
+    make_unified_flow_matching_input,
+)
 
 
 class RK4Solver(BaseSolver):
@@ -22,6 +25,7 @@ class RK4Solver(BaseSolver):
     @torch.no_grad()
     def solve(self, initial_state: torch.Tensor) -> FlowSolveResult:
         x = initial_state
+        time_channels = int(getattr(self._model, "time_channels", 2))
 
         dt = float(self._t_end - self._t_start) / float(self._num_steps)
         t_schedule = np.linspace(self._t_start, self._t_end, self._num_steps + 1)
@@ -35,19 +39,22 @@ class RK4Solver(BaseSolver):
             t2 = t0 + dt
 
             t0_tensor = torch.full((x.shape[0], 1), t0, device=x.device, dtype=x.dtype)
-            k1 = self._model(make_unified_flow_matching_input(x, t0_tensor))
+            t0_input = make_time_input(t0_tensor, time_channels=time_channels)
+            k1 = self._model(make_unified_flow_matching_input(x, t0_input))
 
             t1_tensor = torch.full((x.shape[0], 1), t1, device=x.device, dtype=x.dtype)
+            t1_input = make_time_input(t1_tensor, time_channels=time_channels)
             k2 = self._model(
-                make_unified_flow_matching_input(x + 0.5 * dt * k1, t1_tensor)
+                make_unified_flow_matching_input(x + 0.5 * dt * k1, t1_input)
             )
 
             k3 = self._model(
-                make_unified_flow_matching_input(x + 0.5 * dt * k2, t1_tensor)
+                make_unified_flow_matching_input(x + 0.5 * dt * k2, t1_input)
             )
 
             t2_tensor = torch.full((x.shape[0], 1), t2, device=x.device, dtype=x.dtype)
-            k4 = self._model(make_unified_flow_matching_input(x + dt * k3, t2_tensor))
+            t2_input = make_time_input(t2_tensor, time_channels=time_channels)
+            k4 = self._model(make_unified_flow_matching_input(x + dt * k3, t2_input))
 
             x = x + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
             trajectory.append(x.clone())

@@ -14,6 +14,7 @@ from torch.utils.data import Dataset
 from dataloaders.base_dataloaders import (
     BaseDataset,
     BaseItem,
+    make_time_input,
     make_unified_flow_matching_input,
 )
 
@@ -154,8 +155,9 @@ class DeterministicFlowDataset(BaseDataset):
         x_t = x * (1 - t) + y * t
 
         # Build unified input
+        time_input = make_time_input(t.unsqueeze(0))
         unified = make_unified_flow_matching_input(
-            x_t.unsqueeze(0), t.unsqueeze(0)
+            x_t.unsqueeze(0), time_input
         ).squeeze(0)
 
         return DeterministicItem(
@@ -232,8 +234,9 @@ class SingleImageDataset(BaseDataset):
         # x_t = t * y (since x = 0)
         x_t = y * t
 
+        time_input = make_time_input(t.unsqueeze(0))
         unified = make_unified_flow_matching_input(
-            x_t.unsqueeze(0), t.unsqueeze(0)
+            x_t.unsqueeze(0), time_input
         ).squeeze(0)
 
         return DeterministicItem(
