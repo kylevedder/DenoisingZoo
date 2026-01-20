@@ -31,6 +31,9 @@ solver:
   _target_: solvers.euler_solver.EulerSolver
   num_steps: 50
 
+# Run name (required) - identifies this training run
+run_name: ???  # Must be provided via CLI: python launcher.py run_name=my_experiment
+
 # Experiment tracking (Trackio)
 trackio:
   enabled: true

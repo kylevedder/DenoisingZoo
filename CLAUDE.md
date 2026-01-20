@@ -19,28 +19,33 @@ data = data.to(device)
 ## Commands
 
 ### Training
-```bash
-# Local training (auto-detects device: CUDA → MPS → CPU)
-python launcher.py
 
-# Explicit device
-python launcher.py --device mps
+**Every training run requires a `run_name`** to identify it in trackio and checkpoints:
+
+```bash
+# Basic training (run_name is required!)
+python launcher.py run_name=my_experiment
 
 # With Hydra config overrides
-python launcher.py dataloaders=celeba model=cnn epochs=100
+python launcher.py run_name=celeba_cnn_v1 dataloaders=celeba model=cnn epochs=100
 
 # CIFAR-10 with UNet and MeanFlow loss
-python launcher.py dataloaders=cifar10 model=unet loss=meanflow epochs=100
+python launcher.py run_name=cifar10_meanflow dataloaders=cifar10 model=unet loss=meanflow epochs=100
 
 # ImageNet with DiT (requires pre-computed latents or VAE)
-python launcher.py dataloaders=imagenet model=dit_b loss=meanflow epochs=80
+python launcher.py run_name=imagenet_dit_b dataloaders=imagenet model=dit_b loss=meanflow epochs=80
 
 # Resume from checkpoint
-python launcher.py resume=true
+python launcher.py run_name=my_experiment resume=true
 
-# Eval-only mode
-python launcher.py eval_checkpoint=outputs/ckpts/mlp/archive/run_YYYYMMDD_HHMMSS_epoch_0010.pt
+# Eval-only mode (run_name still required but won't create new trackio run)
+python launcher.py run_name=eval_run eval_checkpoint=outputs/ckpts/mlp/archive/run_YYYYMMDD_HHMMSS_epoch_0010.pt
 ```
+
+**Run naming conventions:**
+- Use descriptive names: `cifar10_unet_meanflow_lr1e4`
+- Include key hyperparameters: `dit_b_bs64_ep100`
+- Version experiments: `celeba_v1`, `celeba_v2`
 
 ### Remote Training (Modal)
 ```bash
@@ -49,18 +54,20 @@ python launcher.py --backend modal dataloaders=celeba model=cnn
 ```
 
 ### Experiment Tracking (Trackio)
-Trackio is enabled by default. Metrics logged per epoch:
+Trackio is enabled by default. Each run is identified by the required `run_name` parameter.
+
+**Metrics logged per epoch:**
 - `epoch`, `train/loss`, `eval/energy_distance`
 - On MPS: `mps/allocated_mb`, `mps/driver_mb`, `gpu/util_pct`, `gpu/freq_mhz`, `gpu/power_w`, `gpu/temp_c`
 
-For GPU metrics, install macmon: `brew install macmon`
+GPU metrics are collected via async streaming from macmon (install: `brew install macmon`). The monitor samples every 500ms and reports rolling averages over a 5-second window.
 
 ```bash
 # View dashboard (launches in browser)
 trackio show --project denoising-zoo
 
 # Disable tracking for a run
-python launcher.py trackio.enabled=false
+python launcher.py run_name=test trackio.enabled=false
 ```
 
 **CLI for reading results:**

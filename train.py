@@ -46,9 +46,10 @@ def init_trackio(cfg: DictConfig) -> bool:
     # Convert OmegaConf to plain dict for trackio config
     config_dict = OmegaConf.to_container(cfg, resolve=True)
     project = trackio_cfg.get("project", "denoising-zoo")
+    run_name = cfg.get("run_name")
 
-    trackio.init(project=project, config=config_dict)
-    print(f"Trackio: project={project}")
+    trackio.init(project=project, name=run_name, config=config_dict)
+    print(f"Trackio: project={project}, run={run_name}")
     return True
 
 
