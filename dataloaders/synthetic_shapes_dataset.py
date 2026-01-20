@@ -6,6 +6,8 @@ No I/O required - everything is generated in memory.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 from torch.utils.data import Dataset
 
@@ -14,6 +16,12 @@ from dataloaders.base_dataloaders import (
     BaseItem,
     make_unified_flow_matching_input,
 )
+
+
+@dataclass
+class SyntheticShapesItem(BaseItem):
+    raw_source: torch.Tensor
+    raw_target: torch.Tensor
 
 
 class SyntheticShapesDataset(Dataset):
@@ -151,4 +159,6 @@ class SyntheticShapesFlowDataset(BaseDataset):
             x_t.unsqueeze(0), t.unsqueeze(0)
         ).squeeze(0)
 
-        return BaseItem(input=x_t, t=t, target=v, unified_input=unified, raw_source=x, raw_target=y)
+        return SyntheticShapesItem(
+            input=x_t, t=t, target=v, unified_input=unified, raw_source=x, raw_target=y
+        )

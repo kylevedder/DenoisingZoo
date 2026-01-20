@@ -14,8 +14,6 @@ class BaseItem:
     t: torch.Tensor
     target: torch.Tensor | None
     unified_input: torch.Tensor
-    raw_source: torch.Tensor | None = None  # Original noise (x)
-    raw_target: torch.Tensor | None = None  # Original data (y)
 
     def to_dict(self) -> dict[str, torch.Tensor]:
         return asdict(self)
