@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Callable
 
 import hydra
@@ -229,6 +230,7 @@ def train(cfg: DictConfig) -> None:
 
     epochs: int = int(cfg.get("epochs", 1))
     eval_every: int = int(cfg.get("eval_every", 1))  # how often to run eval (in epochs)
+    train_start_time = time.time()
     for epoch in range(start_epoch, epochs + 1):
         avg_loss = train_one_epoch(
             model=model,
@@ -242,7 +244,12 @@ def train(cfg: DictConfig) -> None:
         print(f"epoch {epoch:04d} | loss {avg_loss:.6f}")
 
         # Prepare metrics for logging
-        metrics = {"epoch": epoch, "train/loss": avg_loss}
+        elapsed_seconds = time.time() - train_start_time
+        metrics = {
+            "epoch": epoch,
+            "train/loss": avg_loss,
+            "train/elapsed_seconds": elapsed_seconds,
+        }
 
         # Eval (distributional) based on eval_every policy
         if eval_every > 0 and (epoch % eval_every == 0 or epoch == epochs):
