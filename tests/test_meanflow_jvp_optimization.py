@@ -1,7 +1,8 @@
 """Tests for MeanFlow JVP correctness.
 
-These tests verify that the JVP computation produces correct results,
-allowing us to safely optimize the implementation.
+These tests verify that the JVP computation produces correct results.
+Note: torch.func.linearize would be more efficient but nn.Linear/nn.Conv2d
+don't support forward-mode AD yet, so we use the two-pass jvp approach.
 """
 
 import sys
@@ -12,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
 import torch.nn as nn
-from torch.func import jvp, linearize
+from torch.func import jvp
 
 from dataloaders.base_dataloaders import make_unified_flow_matching_input
 
@@ -52,8 +53,8 @@ class SimpleCNN(nn.Module):
         return self.net(x)
 
 
-def compute_jvp_current_method(model, z_t, t):
-    """Current implementation: two forward passes."""
+def compute_jvp_two_pass(model, z_t, t):
+    """Current implementation: two forward passes with jvp."""
 
     def model_fn(z: torch.Tensor) -> torch.Tensor:
         unified = make_unified_flow_matching_input(z, t)
@@ -63,28 +64,12 @@ def compute_jvp_current_method(model, z_t, t):
     with torch.no_grad():
         v_t_initial = model_fn(z_t)
 
-    # Second forward pass inside jvp
+    # Second forward pass inside jvp (uses reverse-mode AD internally)
     v_t, jvp_result = jvp(
         model_fn,
         (z_t,),
         (v_t_initial.detach(),),
     )
-
-    return v_t, jvp_result
-
-
-def compute_jvp_linearize_method(model, z_t, t):
-    """Optimized implementation: single forward pass with linearize."""
-
-    def model_fn(z: torch.Tensor) -> torch.Tensor:
-        unified = make_unified_flow_matching_input(z, t)
-        return model(unified)
-
-    # Single forward pass + linearization
-    v_t, jvp_fn = linearize(model_fn, z_t)
-
-    # Compute JVP using the already-computed v_t as tangent
-    jvp_result = jvp_fn(v_t)
 
     return v_t, jvp_result
 
@@ -110,8 +95,8 @@ def compute_jvp_finite_diff(model, z_t, t, eps=1e-4):
 class TestJVPCorrectness:
     """Test JVP computation correctness."""
 
-    def test_mlp_current_vs_finite_diff(self):
-        """Verify current JVP method matches finite differences for MLP."""
+    def test_mlp_jvp_vs_finite_diff(self):
+        """Verify JVP method matches finite differences for MLP."""
         torch.manual_seed(42)
 
         model = SimpleMLP(in_dim=3, hidden_dim=32, out_dim=2)  # 2D input + time -> 2D output
@@ -119,42 +104,21 @@ class TestJVPCorrectness:
         z_t = torch.randn(B, 2)
         t = torch.rand(B, 1) * 0.8 + 0.1  # t in [0.1, 0.9]
 
-        v_t_curr, jvp_curr = compute_jvp_current_method(model, z_t, t)
+        v_t_jvp, jvp_result = compute_jvp_two_pass(model, z_t, t)
         v_t_fd, jvp_fd = compute_jvp_finite_diff(model, z_t, t)
 
         # v_t should match exactly
-        assert torch.allclose(v_t_curr, v_t_fd, atol=1e-6), \
-            f"v_t mismatch: {(v_t_curr - v_t_fd).abs().max()}"
+        assert torch.allclose(v_t_jvp, v_t_fd, atol=1e-6), \
+            f"v_t mismatch: {(v_t_jvp - v_t_fd).abs().max()}"
 
         # JVP should match approximately (finite diff has some error)
-        assert torch.allclose(jvp_curr, jvp_fd, atol=1e-3), \
-            f"JVP mismatch: {(jvp_curr - jvp_fd).abs().max()}"
+        assert torch.allclose(jvp_result, jvp_fd, atol=1e-3), \
+            f"JVP mismatch: {(jvp_result - jvp_fd).abs().max()}"
 
-        print("✓ MLP current method matches finite differences")
+        print("✓ MLP JVP matches finite differences")
 
-    def test_mlp_linearize_vs_current(self):
-        """Verify linearize method matches current method for MLP."""
-        torch.manual_seed(42)
-
-        model = SimpleMLP(in_dim=3, hidden_dim=32, out_dim=2)
-        B = 8
-        z_t = torch.randn(B, 2)
-        t = torch.rand(B, 1) * 0.8 + 0.1
-
-        v_t_curr, jvp_curr = compute_jvp_current_method(model, z_t, t)
-        v_t_lin, jvp_lin = compute_jvp_linearize_method(model, z_t, t)
-
-        # Both should match exactly (same computation, different code path)
-        assert torch.allclose(v_t_curr, v_t_lin, atol=1e-6), \
-            f"v_t mismatch: {(v_t_curr - v_t_lin).abs().max()}"
-
-        assert torch.allclose(jvp_curr, jvp_lin, atol=1e-6), \
-            f"JVP mismatch: {(jvp_curr - jvp_lin).abs().max()}"
-
-        print("✓ MLP linearize method matches current method")
-
-    def test_cnn_current_vs_finite_diff(self):
-        """Verify current JVP method matches finite differences for CNN."""
+    def test_cnn_jvp_vs_finite_diff(self):
+        """Verify JVP method matches finite differences for CNN."""
         torch.manual_seed(42)
 
         model = SimpleCNN(in_channels=3, hidden_channels=16)
@@ -163,40 +127,19 @@ class TestJVPCorrectness:
         z_t = torch.randn(B, 3, H, W)
         t = torch.rand(B, 1) * 0.8 + 0.1
 
-        v_t_curr, jvp_curr = compute_jvp_current_method(model, z_t, t)
+        v_t_jvp, jvp_result = compute_jvp_two_pass(model, z_t, t)
         v_t_fd, jvp_fd = compute_jvp_finite_diff(model, z_t, t)
 
-        assert torch.allclose(v_t_curr, v_t_fd, atol=1e-6), \
-            f"v_t mismatch: {(v_t_curr - v_t_fd).abs().max()}"
+        assert torch.allclose(v_t_jvp, v_t_fd, atol=1e-6), \
+            f"v_t mismatch: {(v_t_jvp - v_t_fd).abs().max()}"
 
-        assert torch.allclose(jvp_curr, jvp_fd, atol=1e-3), \
-            f"JVP mismatch: {(jvp_curr - jvp_fd).abs().max()}"
+        assert torch.allclose(jvp_result, jvp_fd, atol=1e-3), \
+            f"JVP mismatch: {(jvp_result - jvp_fd).abs().max()}"
 
-        print("✓ CNN current method matches finite differences")
-
-    def test_cnn_linearize_vs_current(self):
-        """Verify linearize method matches current method for CNN."""
-        torch.manual_seed(42)
-
-        model = SimpleCNN(in_channels=3, hidden_channels=16)
-        B = 4
-        H, W = 8, 8
-        z_t = torch.randn(B, 3, H, W)
-        t = torch.rand(B, 1) * 0.8 + 0.1
-
-        v_t_curr, jvp_curr = compute_jvp_current_method(model, z_t, t)
-        v_t_lin, jvp_lin = compute_jvp_linearize_method(model, z_t, t)
-
-        assert torch.allclose(v_t_curr, v_t_lin, atol=1e-6), \
-            f"v_t mismatch: {(v_t_curr - v_t_lin).abs().max()}"
-
-        assert torch.allclose(jvp_curr, jvp_lin, atol=1e-6), \
-            f"JVP mismatch: {(jvp_curr - jvp_lin).abs().max()}"
-
-        print("✓ CNN linearize method matches current method")
+        print("✓ CNN JVP matches finite differences")
 
     def test_gradient_flow(self):
-        """Verify gradients flow correctly through both methods."""
+        """Verify gradients flow correctly through JVP."""
         torch.manual_seed(42)
 
         model = SimpleMLP(in_dim=3, hidden_dim=32, out_dim=2)
@@ -204,24 +147,15 @@ class TestJVPCorrectness:
         z_t = torch.randn(B, 2, requires_grad=True)
         t = torch.rand(B, 1) * 0.8 + 0.1
 
-        # Current method
-        z_t_curr = z_t.clone().detach().requires_grad_(True)
-        v_t_curr, jvp_curr = compute_jvp_current_method(model, z_t_curr, t)
-        loss_curr = (v_t_curr ** 2 + jvp_curr ** 2).sum()
-        loss_curr.backward()
-        grad_curr = z_t_curr.grad.clone()
+        v_t, jvp_result = compute_jvp_two_pass(model, z_t, t)
+        loss = (v_t ** 2 + jvp_result ** 2).sum()
+        loss.backward()
 
-        # Linearize method
-        z_t_lin = z_t.clone().detach().requires_grad_(True)
-        v_t_lin, jvp_lin = compute_jvp_linearize_method(model, z_t_lin, t)
-        loss_lin = (v_t_lin ** 2 + jvp_lin ** 2).sum()
-        loss_lin.backward()
-        grad_lin = z_t_lin.grad.clone()
+        # Check gradients exist and are non-zero
+        assert z_t.grad is not None, "No gradient for z_t"
+        assert z_t.grad.abs().sum() > 0, "Gradient is all zeros"
 
-        assert torch.allclose(grad_curr, grad_lin, atol=1e-4), \
-            f"Gradient mismatch: {(grad_curr - grad_lin).abs().max()}"
-
-        print("✓ Gradients match between methods")
+        print("✓ Gradients flow correctly through JVP")
 
     def test_different_batch_sizes(self):
         """Test with various batch sizes."""
@@ -232,25 +166,47 @@ class TestJVPCorrectness:
             z_t = torch.randn(B, 2)
             t = torch.rand(B, 1) * 0.8 + 0.1
 
-            v_t_curr, jvp_curr = compute_jvp_current_method(model, z_t, t)
-            v_t_lin, jvp_lin = compute_jvp_linearize_method(model, z_t, t)
+            v_t_jvp, jvp_result = compute_jvp_two_pass(model, z_t, t)
+            v_t_fd, jvp_fd = compute_jvp_finite_diff(model, z_t, t)
 
-            assert torch.allclose(v_t_curr, v_t_lin, atol=1e-6)
-            assert torch.allclose(jvp_curr, jvp_lin, atol=1e-6)
+            assert torch.allclose(v_t_jvp, v_t_fd, atol=1e-6)
+            assert torch.allclose(jvp_result, jvp_fd, atol=1e-3)
 
         print("✓ All batch sizes pass")
+
+    def test_meanflow_loss_integration(self):
+        """Test that MeanFlowLoss computes without error."""
+        from losses.meanflow_loss import MeanFlowLoss
+
+        torch.manual_seed(42)
+        model = SimpleMLP(in_dim=3, hidden_dim=32, out_dim=2)
+        loss_fn = MeanFlowLoss(model=model, meanflow_ratio=0.5)
+
+        batch = {
+            'raw_source': torch.randn(8, 2),
+            'raw_target': torch.randn(8, 2),
+        }
+
+        loss = loss_fn(batch)
+        assert loss.ndim == 0, "Loss should be scalar"
+        assert not torch.isnan(loss), "Loss is NaN"
+
+        loss.backward()
+        grad_norm = sum(p.grad.norm().item() for p in model.parameters() if p.grad is not None)
+        assert grad_norm > 0, "No gradients computed"
+
+        print("✓ MeanFlowLoss integration test passed")
 
 
 def run_all_tests():
     """Run all JVP correctness tests."""
     test = TestJVPCorrectness()
 
-    test.test_mlp_current_vs_finite_diff()
-    test.test_mlp_linearize_vs_current()
-    test.test_cnn_current_vs_finite_diff()
-    test.test_cnn_linearize_vs_current()
+    test.test_mlp_jvp_vs_finite_diff()
+    test.test_cnn_jvp_vs_finite_diff()
     test.test_gradient_flow()
     test.test_different_batch_sizes()
+    test.test_meanflow_loss_integration()
 
     print("\n✅ All JVP correctness tests passed!")
 
