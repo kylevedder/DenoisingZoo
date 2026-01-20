@@ -167,7 +167,7 @@ def generate_samples_meanflow_cfg(
 ) -> torch.Tensor:
     """Generate samples with CFG using single-step MeanFlow.
 
-    MeanFlow 1-NFE generation: x = z - (t - r) * v_cfg(z, t)
+    MeanFlow 1-NFE generation: x = z + (t - r) * v_cfg(z, r)
 
     Args:
         model: Class-conditional MeanFlow model
@@ -194,7 +194,7 @@ def generate_samples_meanflow_cfg(
     z = torch.randn((B, *sample_shape), device=device, generator=rng)
 
     # Create time tensor
-    time_tensor = torch.full((B, 1), t, device=device, dtype=z.dtype)
+    time_tensor = torch.full((B, 1), r, device=device, dtype=z.dtype)
 
     # Get CFG velocity
     v_cfg = cfg_sample_step(
@@ -202,6 +202,6 @@ def generate_samples_meanflow_cfg(
     )
 
     # Single-step generation
-    samples = z - (t - r) * v_cfg
+    samples = z + (t - r) * v_cfg
 
     return samples

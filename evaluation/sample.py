@@ -114,20 +114,20 @@ def generate_samples_meanflow(
                 generator=rng,
             )
 
-            # Create time tensor (using t for the unified input)
+            # Create time tensor (using r for the unified input)
             # For MeanFlow, we query v(z, r, t) but the model takes unified input
-            # with the time channel. We use t=1 for single-step generation.
+            # with the time channel. We use r (start time) for single-step generation.
             time_tensor = torch.full(
-                (current_batch, 1), t, device=device, dtype=z.dtype
+                (current_batch, 1), r, device=device, dtype=z.dtype
             )
 
             # Build unified input
             unified = make_unified_flow_matching_input(z, time_tensor)
 
-            # Single-step generation: x = z - (t - r) * v(z, t)
-            # For r=0, t=1: x = z - v(z, 1)
+            # Single-step generation: x = z + (t - r) * v(z, r)
+            # For r=0, t=1: x = z + v(z, 0)
             v = model(unified)
-            samples = z - (t - r) * v
+            samples = z + (t - r) * v
 
             yield samples
             samples_generated += current_batch

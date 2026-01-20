@@ -123,14 +123,17 @@ class TestMeanFlowTarget:
             v_t_initial = model(unified_t)
 
         # Compute JVP
-        def model_fn(z):
-            unified = make_unified_flow_matching_input(z, t)
+        def model_fn(z, t_val):
+            unified = make_unified_flow_matching_input(z, t_val)
             return model(unified)
+
+        v_t_initial = model_fn(z_t, t)
+        tangent_t = torch.ones_like(t)
 
         v_t, jvp_result = torch.func.jvp(
             model_fn,
-            (z_t,),
-            (v_t_initial.detach(),),
+            (z_t, t),
+            (v_t_initial.detach(), tangent_t),
         )
 
         # Compute MeanFlow target
@@ -177,14 +180,17 @@ class TestMeanFlowTarget:
             v_t_initial = model(unified_t)
 
         # Compute JVP
-        def model_fn(z):
-            unified = make_unified_flow_matching_input(z, t)
+        def model_fn(z, t_val):
+            unified = make_unified_flow_matching_input(z, t_val)
             return model(unified)
+
+        v_t_initial = model_fn(z_t, t)
+        tangent_t = torch.ones_like(t)
 
         v_t, jvp_result = torch.func.jvp(
             model_fn,
-            (z_t,),
-            (v_t_initial.detach(),),
+            (z_t, t),
+            (v_t_initial.detach(), tangent_t),
         )
 
         # MeanFlow target: u_tgt = v_t - (t-r) * JVP = v_t - 1 * JVP
@@ -222,14 +228,17 @@ class TestGradientFlow:
         with torch.no_grad():
             v_t_initial = model(unified_t)
 
-        def model_fn(z):
-            unified = make_unified_flow_matching_input(z, t)
+        def model_fn(z, t_val):
+            unified = make_unified_flow_matching_input(z, t_val)
             return model(unified)
+
+        v_t_initial = model_fn(z_t, t)
+        tangent_t = torch.ones_like(t)
 
         v_t, jvp_result = torch.func.jvp(
             model_fn,
-            (z_t,),
-            (v_t_initial.detach(),),  # Tangent should be detached
+            (z_t, t),
+            (v_t_initial.detach(), tangent_t),
         )
 
         delta_t = (t - r).view(B, 1, 1, 1)
