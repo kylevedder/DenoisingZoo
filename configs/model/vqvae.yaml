@@ -1,8 +1,0 @@
-_target_: models.vqvae.vqvae.VQVAE
-in_channels: 3
-hidden_channels: 128
-embedding_dim: 64
-num_embeddings: 512
-commitment_cost: 0.25
-
-
