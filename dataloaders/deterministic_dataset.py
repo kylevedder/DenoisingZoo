@@ -159,12 +159,12 @@ class DeterministicFlowDataset(BaseDataset):
         ).squeeze(0)
 
         return DeterministicItem(
-            raw_source=x,
-            raw_target=y,
-            t=t,
             input=x_t,
+            t=t,
             target=v,
             unified_input=unified,
+            raw_source=x,
+            raw_target=y,
             label=class_idx,
         )
 
@@ -237,11 +237,11 @@ class SingleImageDataset(BaseDataset):
         ).squeeze(0)
 
         return DeterministicItem(
-            raw_source=x,
-            raw_target=y,
-            t=t,
             input=x_t,
+            t=t,
             target=v,
             unified_input=unified,
+            raw_source=x,
+            raw_target=y,
             label=0,
         )
