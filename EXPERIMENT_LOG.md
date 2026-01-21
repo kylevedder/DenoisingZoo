@@ -448,11 +448,36 @@ python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow 
 - Training stable and fast with ratio=0.25 + batch_size=128
 - Modal connection dropped after ~35 minutes (14 epochs)
 
+**Trackio Data (synced from Modal):**
+- Steps logged: 5500+ (14 epochs of 391 batches)
+- Final loss values: 0.205-0.21
+- Energy distance at epoch 5: 0.246 (very good!)
+
+---
+
+### Modal Connection Issues (2026-01-21)
+
+**Status:** Ongoing investigation
+
+Multiple experiments failed due to Modal client connection drops:
+- `StreamTerminatedError: Connection lost`
+- `GRPCError: App state is APP_STATE_STOPPED`
+- `Function call has expired`
+
+**Workarounds attempted:**
+1. `modal run --detach` - Still fails after ~5 min
+2. Frequent volume commits (every 5 min) - Data preserved but training interrupted
+
+**Recommendations:**
+- Use `save_every=5` for frequent checkpointing
+- Sync trackio data often: `python scripts/modal_app.py sync`
+- Consider using resume capability when connections drop
+
 ---
 
 ### Experiment 4.1: CIFAR-10 Official Config (Short Run)
 
-**Status:** ATTEMPTED - JVP too slow for ratio=0.75
+**Status:** BLOCKED - Modal connection issues; JVP too slow for ratio=0.75
 
 **Goal:** Validate CIFAR-10 training with official hyperparameters (shorter run first).
 
