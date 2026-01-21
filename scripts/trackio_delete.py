@@ -12,16 +12,31 @@ def get_db_path(project: str) -> Path:
 
 
 def list_runs(project: str) -> list[tuple[str, str]]:
-    """Return list of (run_name, created_at) tuples."""
+    """Return list of (run_name, created_at) tuples from all tables."""
     db_path = get_db_path(project)
     if not db_path.exists():
         return []
 
     conn = sqlite3.connect(db_path)
-    cursor = conn.execute("SELECT run_name, created_at FROM configs ORDER BY created_at")
-    runs = cursor.fetchall()
+    # Get runs from configs table (with created_at)
+    cursor = conn.execute("SELECT run_name, created_at FROM configs")
+    runs_with_time = {name: created for name, created in cursor.fetchall()}
+
+    # Get any runs that only exist in metrics table
+    cursor = conn.execute("SELECT DISTINCT run_name FROM metrics")
+    for (name,) in cursor.fetchall():
+        if name not in runs_with_time:
+            runs_with_time[name] = "unknown"
+
+    # Get any runs that only exist in system_metrics table
+    cursor = conn.execute("SELECT DISTINCT run_name FROM system_metrics")
+    for (name,) in cursor.fetchall():
+        if name not in runs_with_time:
+            runs_with_time[name] = "unknown"
+
     conn.close()
-    return runs
+    # Sort by created_at, with "unknown" at the end
+    return sorted(runs_with_time.items(), key=lambda x: (x[1] == "unknown", x[1]))
 
 
 def delete_runs(project: str, run_names: list[str]) -> int:

@@ -127,15 +127,18 @@ trackio get metric --project denoising-zoo --run <run> --metric "gpu/util_pct" -
 ```
 
 **Deleting runs:**
+
+**IMPORTANT: Always run `--list` first before deleting.** Deletions are permanent and cannot be undone. List all runs to see exact names before constructing a delete pattern.
+
 ```bash
-# List all runs
+# ALWAYS list first to see exact run names
 python scripts/trackio_delete.py --list
+
+# Preview what would be deleted (use --dry-run before actual delete)
+python scripts/trackio_delete.py "old_experiment" --dry-run
 
 # Delete runs matching a regex pattern (with confirmation)
 python scripts/trackio_delete.py "test_.*"
-
-# Preview what would be deleted
-python scripts/trackio_delete.py "old_experiment" --dry-run
 ```
 
 **Storage:** `~/.cache/huggingface/trackio/`
