@@ -191,6 +191,7 @@ class UNet(TimeChannelModule):
         dropout: float = 0.1,
         num_heads: int = 4,
         input_resolution: int = 32,
+        use_separate_time_embeds: bool = True,
     ) -> None:
         super().__init__(time_channels)
 
@@ -204,15 +205,33 @@ class UNet(TimeChannelModule):
         self.num_res_blocks = num_res_blocks
         self.attention_resolutions = set(attention_resolutions)
         self.input_resolution = input_resolution
+        self.use_separate_time_embeds = use_separate_time_embeds
 
         time_emb_dim = base_channels * 4
 
-        # Time embedding MLP
-        self.time_embed = nn.Sequential(
-            nn.Linear(base_channels, time_emb_dim),
-            nn.SiLU(),
-            nn.Linear(time_emb_dim, time_emb_dim),
-        )
+        if use_separate_time_embeds:
+            # Two separate time embedding pathways (MeanFlow official style)
+            # Pathway 1: embed t (end time)
+            self.time_embed_t = nn.Sequential(
+                nn.Linear(base_channels, time_emb_dim),
+                nn.SiLU(),
+                nn.Linear(time_emb_dim, time_emb_dim),
+            )
+            # Pathway 2: embed (t - r) (duration)
+            self.time_embed_duration = nn.Sequential(
+                nn.Linear(base_channels, time_emb_dim),
+                nn.SiLU(),
+                nn.Linear(time_emb_dim, time_emb_dim),
+            )
+            # Projection from concatenated embeddings back to time_emb_dim
+            self.time_embed_proj = nn.Linear(time_emb_dim * 2, time_emb_dim)
+        else:
+            # Legacy: single time embedding MLP that sums sinusoidal embeddings
+            self.time_embed = nn.Sequential(
+                nn.Linear(base_channels, time_emb_dim),
+                nn.SiLU(),
+                nn.Linear(time_emb_dim, time_emb_dim),
+            )
 
         # Input projection (accounts for time channel in unified input)
         self.input_conv = nn.Conv2d(
@@ -386,13 +405,47 @@ class UNet(TimeChannelModule):
         return h
 
     def _build_time_embedding(self, t: torch.Tensor) -> torch.Tensor:
+        """Build time embedding from time tensor.
+
+        Args:
+            t: Time tensor of shape (B, 2) where t[:, 0] is r (start time)
+               and t[:, 1] is t (end time).
+
+        Returns:
+            Time embedding of shape (B, time_emb_dim).
+        """
         if t.dim() == 1:
             t = t.unsqueeze(-1)
-        if t.shape[1] == 1:
-            base = sinusoidal_embedding(t, self.base_channels)
+
+        if self.use_separate_time_embeds:
+            # MeanFlow official style: separate pathways for t and (t - r)
+            if t.shape[1] != 2:
+                raise ValueError(
+                    f"use_separate_time_embeds=True requires time input of shape (B, 2), "
+                    f"got shape {tuple(t.shape)}"
+                )
+            r = t[:, 0]  # start time
+            t_end = t[:, 1]  # end time
+            duration = t_end - r  # duration = t - r
+
+            # Embed t (end time) through first pathway
+            emb_t = sinusoidal_embedding(t_end, self.base_channels)
+            emb_t = self.time_embed_t(emb_t)
+
+            # Embed (t - r) (duration) through second pathway
+            emb_duration = sinusoidal_embedding(duration, self.base_channels)
+            emb_duration = self.time_embed_duration(emb_duration)
+
+            # Concatenate and project back to time_emb_dim
+            emb_concat = torch.cat([emb_t, emb_duration], dim=1)
+            return self.time_embed_proj(emb_concat)
         else:
-            base = None
-            for idx in range(t.shape[1]):
-                emb = sinusoidal_embedding(t[:, idx], self.base_channels)
-                base = emb if base is None else base + emb
-        return self.time_embed(base)
+            # Legacy: sum sinusoidal embeddings and pass through single MLP
+            if t.shape[1] == 1:
+                base = sinusoidal_embedding(t, self.base_channels)
+            else:
+                base = None
+                for idx in range(t.shape[1]):
+                    emb = sinusoidal_embedding(t[:, idx], self.base_channels)
+                    base = emb if base is None else base + emb
+            return self.time_embed(base)

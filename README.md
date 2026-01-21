@@ -32,6 +32,8 @@ A clean, simple, hackable codebase for research on denoising models.
   <img src="docs/kmeans_particles.gif" alt="K-means Particles" width="400" />
 </p>
 
+*Left: Learned velocity field evolving over time t∈[0,1]. Right: Particles transported from Gaussian noise (t=0) to target Gaussian mixture (t=1) via ODE integration.*
+
 ## Getting Started
 
 Prerequisites:
@@ -77,4 +79,26 @@ python launcher.py --backend modal run_name=exp dataloaders=celeba model=cnn
 Optional dataset persistence:
 ```bash
 modal volume create training-data
+```
+
+## Visualization
+
+Generate animations from a trained checkpoint:
+
+```bash
+cd visualizers && ./vis_all.sh [CKPT_PATH] [CFG_PATH]
+```
+
+Outputs to `outputs/vis/`:
+- `kmeans_flow.gif` / `.mp4` - velocity field visualization
+- `particles.gif` - particle transport (Euler solver)
+- `particles_rk4.gif` - particle transport (RK4 solver)
+
+Individual visualizers:
+```bash
+# Velocity field animation
+python visualizers/kmeans_field_vis.py --ckpt outputs/ckpts/mlp/last.pt --out field.gif
+
+# Particle transport
+python visualizers/kmeans_particles_vis.py --ckpt outputs/ckpts/mlp/last.pt --out particles.gif --solver rk4
 ```

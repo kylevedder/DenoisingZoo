@@ -1,0 +1,28 @@
+train:
+  dataset:
+    _target_: dataloaders.deterministic_dataset.DeterministicFlowDataset
+    num_classes: 4
+    samples_per_class: 10
+    image_size: 32
+    num_channels: 3
+    seed: 42
+    use_zero_source: false
+  batch_size: 32
+  shuffle: true
+  num_workers: 0
+  pin_memory: false
+  drop_last: false
+eval:
+  dataset:
+    _target_: dataloaders.deterministic_dataset.DeterministicFlowDataset
+    num_classes: 4
+    samples_per_class: 10
+    image_size: 32
+    num_channels: 3
+    seed: 42
+    use_zero_source: false
+  batch_size: 32
+  shuffle: false
+  num_workers: 0
+  pin_memory: false
+  drop_last: false

@@ -1,0 +1,12 @@
+_target_: models.unet.unet.UNet
+in_channels: 3
+out_channels: 3
+base_channels: 128
+time_channels: 2
+channel_mult: [2, 2, 2]
+num_res_blocks: 4
+attention_resolutions: [16, 8]
+dropout: 0.1
+num_heads: 4
+input_resolution: 32
+use_separate_time_embeds: true

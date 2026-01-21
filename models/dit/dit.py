@@ -260,6 +260,7 @@ class DiT(TimeChannelModule):
         num_classes: int = 1000,
         learn_sigma: bool = False,
         class_dropout_prob: float = 0.1,
+        use_separate_time_embeds: bool = True,
     ) -> None:
         super().__init__(time_channels)
         self.input_size = input_size
@@ -269,6 +270,7 @@ class DiT(TimeChannelModule):
         self.out_channels = in_channels * 2 if learn_sigma else in_channels
         self.num_heads = num_heads
         self.hidden_size = hidden_size
+        self.use_separate_time_embeds = use_separate_time_embeds
 
         # Patch embedding
         self.x_embedder = nn.Conv2d(
@@ -285,7 +287,12 @@ class DiT(TimeChannelModule):
         )
 
         # Time and label embeddings
+        # t_embedder: embeds end time t
         self.t_embedder = TimestepEmbedder(hidden_size)
+        # r_embedder: embeds duration (t - r) when use_separate_time_embeds=True
+        # For backward compatibility, this is only used when use_separate_time_embeds=True
+        if use_separate_time_embeds:
+            self.r_embedder = TimestepEmbedder(hidden_size)
         self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
 
         # Transformer blocks
@@ -382,11 +389,22 @@ class DiT(TimeChannelModule):
         x = x + self.pos_embed
 
         # Get time embedding
+        # Time tensor t has shape (B, 2) where t[:, 0] = r (start time), t[:, 1] = t (end time)
         if t.dim() == 1:
             t = t.unsqueeze(-1)
         if t.shape[1] == 1:
+            # Single time value (backward compatibility)
             t_emb = self.t_embedder(t.squeeze(-1))
+        elif self.use_separate_time_embeds:
+            # Official MeanFlow implementation:
+            # - t_embedder embeds end time t
+            # - r_embedder embeds duration (t - r)
+            r_val = t[:, 0]  # Start time
+            t_val = t[:, 1]  # End time
+            duration = t_val - r_val  # Duration
+            t_emb = self.t_embedder(t_val) + self.r_embedder(duration)
         else:
+            # Legacy behavior: sum embeddings of all time components
             t_emb = None
             for idx in range(t.shape[1]):
                 emb = self.t_embedder(t[:, idx])
