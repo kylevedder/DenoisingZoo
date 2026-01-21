@@ -62,6 +62,11 @@ python launcher.py run_name=exp dataloaders=celeba model=cnn
 python launcher.py run_name=exp dataloaders=cifar10 model=unet loss=meanflow
 ```
 
+Enable `torch.compile` for kernel fusion (may improve GPU utilization):
+```bash
+python launcher.py run_name=exp compile=true
+```
+
 Checkpoints are saved at `outputs/ckpts/<arch>/last.pt`.
 
 ## Modal (Remote GPU)

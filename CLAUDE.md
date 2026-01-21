@@ -132,6 +132,22 @@ python launcher.py run_name=eval_run eval_checkpoint=outputs/ckpts/mlp/archive/r
 - Include key hyperparameters: `dit_b_bs64_ep100`
 - Version experiments: `celeba_v1`, `celeba_v2`
 
+### torch.compile (Kernel Fusion)
+
+Enable `torch.compile` for potential speedups via kernel fusion:
+
+```bash
+python launcher.py run_name=my_experiment compile=true
+```
+
+**Notes:**
+- Default is `compile=false` (off)
+- First batch is slower due to compilation warmup
+- Works with MeanFlow loss (JVP is compatible with compiled models)
+- Compiled models are automatically unwrapped for type checks and checkpoint naming
+
+**When to use:** Try `compile=true` when GPU utilization is low or training is CPU-bound. May help fuse small kernels on MPS.
+
 ### Remote Training (Modal)
 ```bash
 modal token new  # one-time auth
