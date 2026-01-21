@@ -306,27 +306,51 @@ From [MeanFlow paper (arXiv:2505.13447)](https://arxiv.org/abs/2505.13447) and [
 
 ---
 
+### Experiment 4.0: CIFAR-10 Baseline (ratio=0)
+
+**Status:** COMPLETED
+
+**Goal:** Establish standard FM baseline on CIFAR-10 before MeanFlow experiments.
+
+**Command:**
+```bash
+uv run python launcher.py dataloaders=cifar10 model=unet loss=meanflow epochs=5 \
+  loss.meanflow_ratio=0 loss.logit_normal_mean=-2.0 loss.logit_normal_std=2.0 \
+  loss.weighting_power=0.75 precision=bf16 run_name=cifar10_ratio0_test
+```
+
+**Run Log:**
+- 2026-01-20: Completed 5 epochs with ratio=0 (standard FM baseline)
+- Final loss: 0.2102
+- Energy distance: 0.8548
+
+**Conclusion:** Standard FM baseline established. Energy distance of 0.85 after 5 epochs on CIFAR-10. Ready for MeanFlow experiments.
+
+---
+
 ### Experiment 4.1: CIFAR-10 Official Config (Short Run)
 
 **Status:** PROPOSED
 
 **Goal:** Validate CIFAR-10 training with official hyperparameters (shorter run first).
 
+**Note:** Due to MPS memory constraints with ratio>0, we need to use small batch size.
+
 **Command:**
 ```bash
-uv run python launcher.py dataloaders=cifar10 model=unet loss=meanflow epochs=200 \
+uv run python launcher.py dataloaders=cifar10 model=unet loss=meanflow epochs=100 \
   loss.meanflow_ratio=0.75 \
   loss.logit_normal_mean=-2.0 \
   loss.logit_normal_std=2.0 \
   loss.weighting_power=0.75 \
-  dataloaders.train.batch_size=256 \
-  optimizer.lr=1e-4 \
+  dataloaders.train.batch_size=32 \
+  gradient_accumulation_steps=8 \
   precision=bf16 \
   eval_every=20 save_every=50 \
-  run_name=cifar10_official_200ep
+  run_name=cifar10_official_100ep
 ```
 
-**Success Criteria:** Training converges, FID improves over epochs.
+**Success Criteria:** Training converges without OOM, loss decreases over epochs.
 
 ---
 
@@ -535,14 +559,35 @@ python launcher.py --backend modal \
 ### Pre-requisites for Phase 4
 
 **Code changes needed:**
-1. Add FID evaluation script (`scripts/eval_fid.py`)
-2. Add CFG sampling support for class-conditional generation
-3. Verify CIFAR-10 dataloader returns class labels
-4. Add multi-NFE evaluation comparison script
+1. ✅ Add FID evaluation script (`scripts/eval_fid.py`) - uses clean-fid
+2. ✅ Add gradient accumulation to train.py for large batch simulation
+3. Add CFG sampling support for class-conditional generation
+4. Verify CIFAR-10 dataloader returns class labels
+5. Add multi-NFE evaluation comparison script
 
 **Config updates:**
+- ✅ Added `gradient_accumulation_steps` to train.yaml
 - Create `configs/loss/meanflow_cifar.yaml` with CIFAR-specific defaults
 - Create `configs/loss/meanflow_imagenet.yaml` with ImageNet defaults
+
+---
+
+### MPS Memory Constraints
+
+**Discovery (2026-01-20):** MeanFlow loss with JVP computation is extremely memory intensive on MPS:
+
+| Configuration | Memory Usage | Speed | Status |
+|---------------|--------------|-------|--------|
+| ratio=0, batch=128 | ~15GB | 2.5s/batch | Works well |
+| ratio=0.75, batch=128 | OOM | - | Fails |
+| ratio=0.75, batch=64, accum=4 | OOM | - | Fails |
+| ratio=0.75, batch=32, accum=8 | ~30GB | 11-40s/batch | Marginal, swapping |
+
+**Conclusion:** JVP computation (required for MeanFlow samples) requires ~2-3x memory of standard forward pass.
+For MPS training, we must either:
+1. Use ratio=0 (standard FM, fast baseline)
+2. Use very small batches with ratio>0 (slow, memory pressure)
+3. Move to GPU cluster for proper MeanFlow training
 
 ---
 

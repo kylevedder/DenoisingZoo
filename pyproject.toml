@@ -20,6 +20,7 @@ dependencies = [
   "gdown>=5.2",
   "trackio>=0.1",
   "pytest>=8.0",
+  "clean-fid>=0.1.35",
 ]
 
 [build-system]
