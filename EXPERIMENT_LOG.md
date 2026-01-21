@@ -367,6 +367,37 @@ Key takeaways:
 
 ---
 
+### Experiment 4.0c: CIFAR-10 MeanFlow on Modal (ratio=0.25, 1 epoch)
+
+**Status:** COMPLETED
+
+**Goal:** Verify MeanFlow training on Modal with CUDA.
+
+**Command:**
+```bash
+python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow epochs=1 \
+  loss.meanflow_ratio=0.25 compile=true run_name=modal_test_full2
+```
+
+**Results:**
+| Metric | Value |
+|--------|-------|
+| Final Loss | 0.2449 |
+| Energy Distance | 0.4455 |
+| Training Time | ~6.5 minutes |
+| Speed | 2.3 it/s (A100-40GB) |
+| Checkpoint | outputs/ckpts/unet/archive/modal_test_full2_epoch_0001.pt |
+
+**Comparison to MPS:**
+| Platform | Ratio | Epochs | ED | Speed |
+|----------|-------|--------|------|-------|
+| MPS | 0.0 | 5 | 0.85 | ~2.5s/batch |
+| Modal A100 | 0.25 | 1 | 0.45 | ~0.4s/batch |
+
+**Conclusion:** Modal A100 is ~60x faster than MPS for ratio=0, and can run ratio>0 experiments that are impractical on MPS. MeanFlow loss with ratio=0.25 achieves better ED in 1 epoch than standard FM in 5 epochs.
+
+---
+
 ### Experiment 4.1: CIFAR-10 Official Config (Short Run)
 
 **Status:** PROPOSED
