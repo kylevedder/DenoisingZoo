@@ -138,3 +138,17 @@ Disable tracking:
 ```bash
 python launcher.py run_name=exp trackio.enabled=false
 ```
+
+## Evaluation
+
+### Why No Validation Loss?
+
+This codebase does not compute a separate validation loss. This follows common practice in flow matching and MeanFlow work, where loss is a training objective rather than a reliable proxy for sample quality:
+
+1. **Training MSE isn't predictive of generation quality.** Flow matching trains a velocity field; lower MSE on velocity targets does not necessarily mean better samples.
+
+2. **FID is the primary quality metric.** Most generative modeling papers (including MeanFlow) report FID, which compares generated vs. real image distributions. Computing FID requires large sample sets (e.g., 50K) and is expensive, so this repo computes it only as a post-training evaluation.
+
+3. **Energy distance during training (proxy).** Each epoch we compute energy distance on the eval split as a lighter-weight distributional metric between generated and real samples. It's more informative than MSE, but still a proxy and sensitive to sample count.
+
+For final evaluation, generate samples and compute FID using standard tooling (e.g., `clean-fid`).
