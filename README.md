@@ -83,10 +83,16 @@ python launcher.py --backend modal run_name=exp dataloaders=celeba model=cnn
 
 Sync trackio logs from Modal (volume commits every 5 min during training):
 ```bash
-python scripts/modal_app.py list   # list runs in Modal volume
+python scripts/modal_app.py list   # list trackio runs in Modal volume
 python scripts/modal_app.py sync   # download and merge with local trackio
 ```
 Run `sync` periodically during long runs to monitor progress locally.
+
+Download checkpoints from Modal:
+```bash
+python scripts/modal_app.py ckpts                    # list checkpoints
+python scripts/modal_app.py download unet/last.pt   # download to outputs/ckpts/
+```
 
 Optional dataset persistence:
 ```bash

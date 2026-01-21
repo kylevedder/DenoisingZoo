@@ -187,6 +187,21 @@ trackio show --project denoising-zoo
 
 For long runs, periodically run `sync` to pull the latest metrics. The sync merges Modal data with your local trackio database.
 
+**Downloading checkpoints from Modal:**
+
+Checkpoints are automatically persisted to the Modal volume during training. To download them locally:
+
+```bash
+# List available checkpoints
+python scripts/modal_app.py ckpts
+
+# Download a specific checkpoint
+python scripts/modal_app.py download unet/last.pt                    # to outputs/ckpts/unet/last.pt
+python scripts/modal_app.py download unet/archive/run_epoch_0050.pt  # archived checkpoint
+```
+
+Note: Large checkpoints (500MB+) may hit Modal's response size limits. For very large models, consider mounting the Modal volume locally.
+
 ### Experiment Tracking (Trackio)
 Trackio is enabled by default. Each run is identified by the required `run_name` parameter.
 

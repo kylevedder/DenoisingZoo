@@ -125,7 +125,28 @@ def train_on_modal(extra_args: list[str]) -> None:
         print(f"Current device: {torch.cuda.current_device()}")
         print(f"Device name: {torch.cuda.get_device_name()}")
 
-    Path("outputs/ckpts").mkdir(parents=True, exist_ok=True)
+    # Persist checkpoints to volume via symlink
+    import shutil
+    ckpt_volume_dir = Path("/data/ckpts")
+    ckpt_volume_dir.mkdir(parents=True, exist_ok=True)
+    outputs_dir = Path("outputs")
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_local_dir = outputs_dir / "ckpts"
+    # Handle existing path: remove if it's not a correct symlink
+    if ckpt_local_dir.is_symlink():
+        # Check if symlink points to the right place
+        if ckpt_local_dir.resolve() != ckpt_volume_dir.resolve():
+            ckpt_local_dir.unlink()
+    elif ckpt_local_dir.exists():
+        # It's a file or directory, remove it
+        if ckpt_local_dir.is_dir():
+            shutil.rmtree(ckpt_local_dir)
+        else:
+            ckpt_local_dir.unlink()
+    # Create symlink if it doesn't exist
+    if not ckpt_local_dir.exists() and not ckpt_local_dir.is_symlink():
+        ckpt_local_dir.symlink_to(ckpt_volume_dir)
+    print(f"[modal] Checkpoints: {ckpt_local_dir} -> {ckpt_volume_dir}")
 
     args = list(extra_args)
 
@@ -219,6 +240,117 @@ def get_trackio_db(project: str = "denoising-zoo") -> bytes | None:
     return db_path.read_bytes()
 
 
+@app.function(
+    image=util_image,
+    volumes={"/data": training_volume},
+)
+def list_checkpoints() -> list[dict]:
+    """List checkpoints stored in the Modal volume.
+
+    Returns list of dicts with keys: path, size_mb, modified
+    """
+    ckpt_dir = Path("/data/ckpts")
+    if not ckpt_dir.exists():
+        return []
+
+    checkpoints = []
+    for pt_file in ckpt_dir.rglob("*.pt"):
+        stat = pt_file.stat()
+        checkpoints.append({
+            "path": str(pt_file.relative_to(ckpt_dir)),
+            "size_mb": round(stat.st_size / (1024 * 1024), 2),
+            "modified": stat.st_mtime,
+        })
+    # Sort by modification time, newest first
+    checkpoints.sort(key=lambda x: x["modified"], reverse=True)
+    return checkpoints
+
+
+def _safe_ckpt_path(base: Path, user_path: str) -> Path | None:
+    """Safely resolve a user-provided path within a base directory.
+
+    Returns the resolved path if it's within the base directory, None otherwise.
+    Prevents path traversal attacks (e.g., "../../../etc/passwd").
+    """
+    # Reject absolute paths
+    if Path(user_path).is_absolute():
+        return None
+    # Resolve the full path
+    full_path = (base / user_path).resolve()
+    # Ensure it's within the base directory
+    try:
+        full_path.relative_to(base.resolve())
+        return full_path
+    except ValueError:
+        return None
+
+
+@app.function(
+    image=util_image,
+    volumes={"/data": training_volume},
+)
+def get_checkpoint(path: str) -> bytes | None:
+    """Download a checkpoint file from Modal volume.
+
+    Args:
+        path: Relative path within /data/ckpts (e.g., "unet/last.pt")
+
+    Returns:
+        Checkpoint bytes or None if not found.
+        Returns None for invalid paths (absolute or traversal attempts).
+
+    Note:
+        Large checkpoints (500MB+) may hit Modal's response size limits.
+        For very large files, consider using Modal volumes directly.
+    """
+    base = Path("/data/ckpts")
+    ckpt_path = _safe_ckpt_path(base, path)
+    if ckpt_path is None:
+        return None
+    if not ckpt_path.exists() or not ckpt_path.is_file():
+        return None
+    return ckpt_path.read_bytes()
+
+
+def download_checkpoint_from_modal(remote_path: str, local_path: str | None = None) -> Path | None:
+    """Download a checkpoint from Modal volume to local storage.
+
+    Args:
+        remote_path: Relative path in Modal volume (e.g., "unet/last.pt")
+        local_path: Local destination path. If None, uses outputs/ckpts/<remote_path>
+
+    Returns:
+        Path to downloaded checkpoint or None if not found
+
+    Note:
+        Large checkpoints (500MB+) may hit Modal's response size limits.
+        For very large files, consider mounting the Modal volume locally.
+    """
+    # Validate remote path (reject absolute or traversal paths)
+    if Path(remote_path).is_absolute() or ".." in Path(remote_path).parts:
+        print(f"Invalid remote path: {remote_path}")
+        return None
+
+    if local_path is None:
+        local_dest = Path("outputs/ckpts") / remote_path
+    else:
+        local_dest = Path(local_path)
+
+    local_dest.parent.mkdir(parents=True, exist_ok=True)
+
+    print(f"Downloading checkpoint '{remote_path}' from Modal...")
+    with app.run():
+        ckpt_bytes = get_checkpoint.remote(remote_path)
+        if ckpt_bytes is None:
+            print(f"Checkpoint not found or invalid path: {remote_path}")
+            return None
+
+        local_dest.write_bytes(ckpt_bytes)
+        size_mb = len(ckpt_bytes) / (1024 * 1024)
+        print(f"Downloaded {size_mb:.1f} MB to {local_dest}")
+        return local_dest
+
+
 def run_modal_training(extra_args: list[str]) -> None:
     """Helper function to run Modal training from launcher.py."""
     print("Starting Modal training job...")
@@ -301,13 +433,24 @@ def _merge_trackio_dbs(local_path: Path, remote_bytes: bytes) -> None:
         Path(remote_path).unlink()
 
 
+def _print_usage():
+    print("Usage: python scripts/modal_app.py <command> [args]")
+    print()
+    print("Commands:")
+    print("  list              List trackio runs in Modal volume")
+    print("  sync [project]    Sync trackio data to local (default: denoising-zoo)")
+    print("  ckpts             List checkpoints in Modal volume")
+    print("  download <path>   Download checkpoint from Modal (e.g., unet/last.pt)")
+    print("  <hydra args>      Run training on Modal with given arguments")
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "sync":
         # Sync trackio data: python scripts/modal_app.py sync [project]
         project = sys.argv[2] if len(sys.argv) > 2 else "denoising-zoo"
         sync_trackio_from_modal(project)
     elif len(sys.argv) > 1 and sys.argv[1] == "list":
-        # List runs: python scripts/modal_app.py list
+        # List trackio runs: python scripts/modal_app.py list
         with app.run():
             runs = list_trackio_runs.remote()
             if runs:
@@ -316,9 +459,34 @@ if __name__ == "__main__":
                     print(f"  - {run}")
             else:
                 print("No runs found in Modal volume")
+    elif len(sys.argv) > 1 and sys.argv[1] == "ckpts":
+        # List checkpoints: python scripts/modal_app.py ckpts
+        from datetime import datetime
+        with app.run():
+            ckpts = list_checkpoints.remote()
+            if ckpts:
+                print("Checkpoints in Modal volume:")
+                for ckpt in ckpts:
+                    mtime = datetime.fromtimestamp(ckpt["modified"]).strftime("%Y-%m-%d %H:%M")
+                    print(f"  {ckpt['path']:50} {ckpt['size_mb']:>8.1f} MB  {mtime}")
+            else:
+                print("No checkpoints found in Modal volume")
+    elif len(sys.argv) > 1 and sys.argv[1] == "download":
+        # Download checkpoint: python scripts/modal_app.py download <path> [local_path]
+        if len(sys.argv) < 3:
+            print("Usage: python scripts/modal_app.py download <path> [local_path]")
+            print("  path: Relative path in Modal volume (e.g., unet/last.pt)")
+            sys.exit(1)
+        remote_path = sys.argv[2]
+        local_path = sys.argv[3] if len(sys.argv) > 3 else None
+        download_checkpoint_from_modal(remote_path, local_path)
+    elif len(sys.argv) > 1 and sys.argv[1] in ("help", "-h", "--help"):
+        _print_usage()
+    elif len(sys.argv) == 1:
+        _print_usage()
     else:
-        # Default: run training
-        extra_args = sys.argv[1:] if len(sys.argv) > 1 else []
+        # Default: run training with given args
+        extra_args = sys.argv[1:]
         run_modal_training(extra_args)
 
 
