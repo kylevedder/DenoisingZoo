@@ -81,6 +81,12 @@ Run on remote NVIDIA GPU:
 python launcher.py --backend modal run_name=exp dataloaders=celeba model=cnn
 ```
 
+Sync trackio logs from Modal to local after training:
+```bash
+python scripts/modal_app.py list   # list runs in Modal volume
+python scripts/modal_app.py sync   # download and merge with local trackio
+```
+
 Optional dataset persistence:
 ```bash
 modal volume create training-data

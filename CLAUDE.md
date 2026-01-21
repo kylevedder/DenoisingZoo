@@ -151,7 +151,19 @@ python launcher.py run_name=my_experiment compile=true
 ### Remote Training (Modal)
 ```bash
 modal token new  # one-time auth
-python launcher.py --backend modal dataloaders=celeba model=cnn
+python launcher.py --backend modal run_name=my_experiment dataloaders=celeba model=cnn
+```
+
+Trackio logs are stored in a Modal volume and must be synced to local after training:
+```bash
+# List runs stored in Modal volume
+python scripts/modal_app.py list
+
+# Sync trackio data from Modal to local
+python scripts/modal_app.py sync
+
+# Then view locally
+trackio show --project denoising-zoo
 ```
 
 ### Experiment Tracking (Trackio)
