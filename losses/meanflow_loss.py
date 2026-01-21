@@ -212,7 +212,9 @@ class MeanFlowLoss(nn.Module):
         t = self._select_time(batch, B, device, dtype, x.device)
 
         # Determine which samples use r != t (MeanFlow) vs r = t (standard FM)
-        use_meanflow = torch.rand(B, 1, device=x.device, dtype=dtype) < self.meanflow_ratio
+        use_meanflow = (
+            torch.rand(B, 1, device=x.device, dtype=dtype) < self.meanflow_ratio
+        )
 
         # Sample r uniformly in [0, t] for MeanFlow samples
         # For standard FM, r = t
@@ -249,7 +251,7 @@ class MeanFlowLoss(nn.Module):
 
         # Compute loss with adaptive weighting
         diff = v_pred - u_tgt
-        sq_error = (diff ** 2).flatten(1).mean(dim=1)  # (B,)
+        sq_error = (diff**2).flatten(1).mean(dim=1)  # (B,)
 
         # Adaptive weighting: w = 1 / (||delta||² + c)^p
         # where delta = u_tgt - v_true
@@ -257,8 +259,10 @@ class MeanFlowLoss(nn.Module):
             # Weight based on the MeanFlow correction magnitude
             with torch.no_grad():
                 delta = (u_tgt.detach() - v_true).flatten(1)
-                delta_sq = (delta ** 2).sum(dim=1)
-                weights = 1.0 / (delta_sq + self.weighting_const) ** self.weighting_power
+                delta_sq = (delta**2).sum(dim=1)
+                weights = (
+                    1.0 / (delta_sq + self.weighting_const) ** self.weighting_power
+                )
                 weights = weights / weights.mean()  # Normalize to preserve scale
         else:
             weights = torch.ones(B, device=x.device, dtype=dtype)
@@ -279,7 +283,6 @@ class MeanFlowLoss(nn.Module):
             # Generic case
             shape = [t.shape[0]] + [1] * (like.dim() - 1)
             return t.view(*shape)
-
 
 
 class MeanFlowLossWrapper(nn.Module):

@@ -168,6 +168,7 @@ python launcher.py dataloaders=deterministic model=unet loss=meanflow epochs=200
 - 2026-01-20: Rerun completed to epoch 200; final loss 0.000000, eval energy_distance 60.270638
 - 2026-01-20: Rerun started with `loss.use_batch_time=true` to use dataset t values
 - 2026-01-20: Ran `meanflow_ratio100_debug` (epochs=1, debug enabled) → v_pred/u_tgt ~0, v_true nonzero (mse ~2.96e-1), jvp ~0, eval energy_distance 60.270638
+- 2026-01-21: Started `meanflow_ratio100_bt` (batch-time rerun, ratio=1.0, use_batch_time=true)
 
 ---
 
