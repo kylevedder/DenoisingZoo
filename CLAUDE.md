@@ -34,6 +34,45 @@ model = Model().to(device)
 data = data.to(device)
 ```
 
+## Code Quality Standards
+
+**Write clean, direct code. Avoid defensive programming patterns that obscure intent.**
+
+### Typing
+- Use lowercase generics: `list[int]`, `tuple[str, ...]`, `dict[str, Any]`
+- Use `| None` not `Optional[T]`: `def foo(x: int | None = None)`
+- Imports should be absolute from the repo root
+
+### File Operations
+- Use `pathlib.Path`, never `os.path` operations
+- Example: `Path("data") / "file.txt"` not `os.path.join("data", "file.txt")`
+
+### Control Flow
+- **No unnecessary `hasattr()` checks.** If an attribute should exist, access it directly. If you're unsure about the interface, fix the interface.
+- **No defensive try-except in straight-line code.** Don't wrap code that should always succeed. Let errors propagate with clear tracebacks.
+- **No overly cautious None checks.** If a value should never be None at that point, don't check for it.
+
+```python
+# BAD - defensive garbage
+def process(model):
+    if hasattr(model, 'encoder'):
+        try:
+            result = model.encoder(x)
+        except Exception:
+            result = None
+    return result
+
+# GOOD - direct and clear
+def process(model):
+    return model.encoder(x)
+```
+
+### Class Design
+- Prefer inheritance over Protocols. Python's Protocol/structural typing is a mess—use explicit base classes for shared interfaces.
+
+### Project Hygiene
+- Do not create `__init__.py` files unless explicitly asked
+
 ## Mathematical Reasoning and Paper Validation
 
 **Use Codex for math-heavy tasks.** When working on mathematical formulas, loss function derivations, or translating paper equations into code, invoke the Codex subagent (OpenAI Codex 5.2 High Reasoning) for validation:
