@@ -14,6 +14,7 @@ from dataloaders.base_dataloaders import (
     make_time_input,
     make_unified_flow_matching_input,
 )
+from model_contracts import TimeChannelModule
 
 
 class MeanFlowLoss(nn.Module):
@@ -70,6 +71,113 @@ class MeanFlowLoss(nn.Module):
         t = t.clamp(self.eps, 1 - self.eps)
         return t
 
+    def _get_batch_time(
+        self,
+        batch: dict[str, torch.Tensor],
+        batch_size: int,
+        device: torch.device | None,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        t = batch["t"]
+        if device is not None:
+            t = t.to(device, non_blocking=True)
+        t = t.to(dtype=dtype)
+        if t.dim() == 1:
+            t = t.view(-1, 1)
+        else:
+            t = t.reshape(t.shape[0], -1)
+        if t.shape[0] != batch_size:
+            raise ValueError(
+                f"Batch time size {t.shape[0]} does not match batch size {batch_size}"
+            )
+        if t.shape[1] != 1:
+            raise ValueError("Batch time must have a single column.")
+        return t
+
+    def _select_time(
+        self,
+        batch: dict[str, torch.Tensor],
+        batch_size: int,
+        device: torch.device | None,
+        dtype: torch.dtype,
+        sample_device: torch.device,
+    ) -> torch.Tensor:
+        if self.use_batch_time and "t" in batch:
+            return self._get_batch_time(batch, batch_size, device, dtype)
+        return self._sample_logit_normal((batch_size, 1), sample_device, dtype)
+
+    def _select_interpolated_state(
+        self,
+        batch: dict[str, torch.Tensor],
+        x: torch.Tensor,
+        y: torch.Tensor,
+        t: torch.Tensor,
+        device: torch.device | None,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        if self.use_batch_time and "input" in batch:
+            z_t = batch["input"]
+            if device is not None:
+                z_t = z_t.to(device, non_blocking=True)
+            return z_t.to(dtype=dtype)
+        t_b = self._broadcast_time(t, x)
+        return (1 - t_b) * x + t_b * y
+
+    def _build_time_pred(
+        self,
+        t: torch.Tensor,
+        r: torch.Tensor,
+        use_meanflow: torch.Tensor,
+    ) -> torch.Tensor:
+        time_pred = make_time_input(t)
+        if use_meanflow.any():
+            time_pred = time_pred.clone()
+            mf_mask = use_meanflow.squeeze(-1)
+            time_pred[mf_mask, 0:1] = r[mf_mask]
+            time_pred[mf_mask, 1:2] = t[mf_mask]
+        return time_pred
+
+    def _compute_target(
+        self,
+        z_t: torch.Tensor,
+        t: torch.Tensor,
+        r: torch.Tensor,
+        v_true: torch.Tensor,
+        use_meanflow: torch.Tensor,
+    ) -> torch.Tensor:
+        if not use_meanflow.any():
+            return v_true
+
+        # We need to compute full JVP: v · ∂v/∂z + ∂v/∂t
+        # This requires differentiating w.r.t. both z and t with tangents [v, 1]
+        # Only compute for MeanFlow samples to save compute (~4x speedup at ratio=0.25)
+        mf_mask = use_meanflow.squeeze(-1)  # (B,) bool
+        z_t_mf = z_t[mf_mask]
+        t_mf = t[mf_mask]
+        r_mf = r[mf_mask]
+
+        def model_fn_mf(z: torch.Tensor, t_input: torch.Tensor) -> torch.Tensor:
+            time_input = make_time_input(t_input)
+            unified = make_unified_flow_matching_input(z, time_input)
+            return self._model(unified)
+
+        with torch.no_grad():
+            v_t_mf_tangent = model_fn_mf(z_t_mf, t_mf)
+
+        tangent_t = torch.ones_like(t_mf)
+        v_t_mf, jvp_mf = torch.func.jvp(
+            model_fn_mf,
+            (z_t_mf, t_mf),
+            (v_t_mf_tangent, tangent_t),
+        )
+
+        delta_t_mf = self._broadcast_time(t_mf - r_mf, v_t_mf)
+        u_tgt_mf = v_t_mf - delta_t_mf * jvp_mf
+
+        u_tgt = v_true.clone()
+        u_tgt[mf_mask] = u_tgt_mf.detach()
+        return u_tgt
+
     def forward(
         self,
         batch: dict[str, torch.Tensor],
@@ -101,23 +209,7 @@ class MeanFlowLoss(nn.Module):
         dtype = x.dtype
 
         # Sample time t from logit-normal (or use batch-provided t)
-        if self.use_batch_time and "t" in batch:
-            t = batch["t"]
-            if device is not None:
-                t = t.to(device, non_blocking=True)
-            t = t.to(dtype=dtype)
-            if t.dim() == 1:
-                t = t.view(-1, 1)
-            else:
-                t = t.reshape(t.shape[0], -1)
-            if t.shape[0] != B:
-                raise ValueError(
-                    f"Batch time size {t.shape[0]} does not match batch size {B}"
-                )
-            if t.shape[1] != 1:
-                raise ValueError("Batch time must have a single column.")
-        else:
-            t = self._sample_logit_normal((B, 1), x.device, dtype)
+        t = self._select_time(batch, B, device, dtype, x.device)
 
         # Determine which samples use r != t (MeanFlow) vs r = t (standard FM)
         use_meanflow = torch.rand(B, 1, device=x.device, dtype=dtype) < self.meanflow_ratio
@@ -127,22 +219,14 @@ class MeanFlowLoss(nn.Module):
         r_uniform = torch.rand(B, 1, device=x.device, dtype=dtype) * t
         r = torch.where(use_meanflow, r_uniform, t)
 
-        time_channels = int(getattr(self._model, "time_channels", 2))
-        if time_channels != 2:
-            raise RuntimeError(
-                "MeanFlowLoss requires model.time_channels == 2 for (r, t) conditioning."
+        if not isinstance(self._model, TimeChannelModule):
+            raise ValueError(
+                "MeanFlowLoss requires model to inherit from TimeChannelModule."
             )
 
         # Compute interpolated state at time t
         # z_t = (1 - t) * x + t * y
-        if self.use_batch_time and "input" in batch:
-            z_t = batch["input"]
-            if device is not None:
-                z_t = z_t.to(device, non_blocking=True)
-            z_t = z_t.to(dtype=dtype)
-        else:
-            t_b = self._broadcast_time(t, x)
-            z_t = (1 - t_b) * x + t_b * y
+        z_t = self._select_interpolated_state(batch, x, y, t, device, dtype)
 
         # Ground truth velocity
         v_true = y - x
@@ -150,12 +234,7 @@ class MeanFlowLoss(nn.Module):
         # Compute model predictions.
         # For standard FM samples, time input should be (t, 1).
         # For MeanFlow samples, time input should be (r, t).
-        time_pred = make_time_input(t)
-        if use_meanflow.any():
-            time_pred = time_pred.clone()
-            mf_mask = use_meanflow.squeeze(-1)
-            time_pred[mf_mask, 0:1] = r[mf_mask]
-            time_pred[mf_mask, 1:2] = t[mf_mask]
+        time_pred = self._build_time_pred(t, r, use_meanflow)
         unified_t = make_unified_flow_matching_input(z_t, time_pred)
 
         # Always compute u(z_t, r, t) for MeanFlow samples and v(z_t, t) for FM samples
@@ -166,47 +245,7 @@ class MeanFlowLoss(nn.Module):
         # From paper Eq. 8: du/dt = v · ∂u/∂z + ∂u/∂t (total derivative along trajectory)
         # So: u_tgt = v_t - (t - r) * (v_t · ∂v/∂z + ∂v/∂t)
 
-        if use_meanflow.any():
-            # We need to compute full JVP: v · ∂v/∂z + ∂v/∂t
-            # This requires differentiating w.r.t. both z and t with tangents [v, 1]
-            # Only compute for MeanFlow samples to save compute (~4x speedup at ratio=0.25)
-
-            # Get indices of MeanFlow samples
-            mf_mask = use_meanflow.squeeze(-1)  # (B,) bool
-
-            # Extract only MeanFlow samples
-            z_t_mf = z_t[mf_mask]
-            t_mf = t[mf_mask]
-            r_mf = r[mf_mask]
-
-            def model_fn_mf(z: torch.Tensor, t_input: torch.Tensor) -> torch.Tensor:
-                time_input = make_time_input(t_input)
-                unified = make_unified_flow_matching_input(z, time_input)
-                return self._model(unified)
-
-            # First forward pass to get tangent vector for z
-            with torch.no_grad():
-                v_t_mf_tangent = model_fn_mf(z_t_mf, t_mf)
-
-            # Second forward pass with JVP
-            # Tangent for z is v_t, tangent for t is 1 (dt/dt = 1)
-            tangent_t = torch.ones_like(t_mf)
-            v_t_mf, jvp_mf = torch.func.jvp(
-                model_fn_mf,
-                (z_t_mf, t_mf),
-                (v_t_mf_tangent, tangent_t),
-            )
-
-            # Compute MeanFlow target for these samples
-            delta_t_mf = self._broadcast_time(t_mf - r_mf, v_t_mf)
-            u_tgt_mf = v_t_mf - delta_t_mf * jvp_mf
-
-            # Build full target tensor: v_true for FM samples, u_tgt_mf for MeanFlow
-            u_tgt = v_true.clone()
-            u_tgt[mf_mask] = u_tgt_mf.detach()  # Stop gradient on target
-        else:
-            # All samples are standard FM
-            u_tgt = v_true
+        u_tgt = self._compute_target(z_t, t, r, v_true, use_meanflow)
 
         # Compute loss with adaptive weighting
         diff = v_pred - u_tgt

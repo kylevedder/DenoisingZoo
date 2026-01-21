@@ -3,8 +3,11 @@ from __future__ import annotations
 import torch
 from torch import nn
 
+from constants import TIME_CHANNELS_REQUIRED
+from model_contracts import TimeChannelModule
 
-class SmallCNN(nn.Module):
+
+class SmallCNN(TimeChannelModule):
     """Lightweight CNN for image-based flow matching.
 
     Expects:
@@ -23,21 +26,17 @@ class SmallCNN(nn.Module):
         base_channels: int = 64,
         num_layers: int = 4,
         kernel_size: int = 3,
-        time_channels: int = 2,
+        time_channels: int = TIME_CHANNELS_REQUIRED,
     ) -> None:
-        super().__init__()
+        super().__init__(time_channels)
         if out_channels is None:
             out_channels = in_channels
 
         if num_layers < 2:
             raise ValueError("num_layers must be >= 2")
-        if time_channels != 2:
-            raise ValueError("time_channels must be 2")
 
         padding = kernel_size // 2
         layers: list[nn.Module] = []
-
-        self.time_channels = time_channels
 
         # First layer takes time channels as extra input
         current_in = in_channels + time_channels

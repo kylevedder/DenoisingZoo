@@ -7,6 +7,8 @@ from typing import Any, Dict
 from torch.utils.data import Dataset
 import torch
 
+from constants import TIME_CHANNELS_REQUIRED
+
 
 @dataclass
 class BaseItem:
@@ -60,7 +62,7 @@ def make_time_input(
     t: torch.Tensor,
     *,
     r: torch.Tensor | None = None,
-    time_channels: int = 2,
+    time_channels: int = TIME_CHANNELS_REQUIRED,
     end_time: torch.Tensor | float | None = None,
 ) -> torch.Tensor:
     """Build time conditioning tensor for unified input.
@@ -80,8 +82,8 @@ def make_time_input(
             raise ValueError("Time tensor must include a batch dimension.")
         return value.reshape(value.shape[0], -1)
 
-    if time_channels != 2:
-        raise ValueError("time_channels must be 2")
+    if time_channels != TIME_CHANNELS_REQUIRED:
+        raise ValueError(f"time_channels must be {TIME_CHANNELS_REQUIRED}")
 
     t_flat = _reshape_time(t)
     if r is None:
@@ -154,7 +156,7 @@ class UnunifiedFlowMatchingInput:
 
 def make_ununified_flow_matching_input(
     unified: torch.Tensor,
-    num_time_channels: int = 2,
+    num_time_channels: int = TIME_CHANNELS_REQUIRED,
 ) -> UnunifiedFlowMatchingInput:
     """Invert make_unified_flow_matching_input.
 
@@ -164,8 +166,8 @@ def make_ununified_flow_matching_input(
     - If unified is (B, C+T, H, W): returns x=(B, C, H, W) and t=(B, T)
       where t is the spatial mean of the appended time channels (constant by construction).
     """
-    if num_time_channels != 2:
-        raise ValueError("num_time_channels must be 2")
+    if num_time_channels != TIME_CHANNELS_REQUIRED:
+        raise ValueError(f"num_time_channels must be {TIME_CHANNELS_REQUIRED}")
     if unified.dim() == 2:
         if unified.shape[1] <= num_time_channels:
             raise ValueError(

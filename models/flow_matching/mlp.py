@@ -3,8 +3,11 @@ from __future__ import annotations
 import torch
 from torch import nn
 
+from constants import TIME_CHANNELS_REQUIRED
+from model_contracts import TimeChannelModule
 
-class MLP(nn.Module):
+
+class MLP(TimeChannelModule):
     """
     Simple MLP for flow matching.
 
@@ -20,12 +23,9 @@ class MLP(nn.Module):
         self,
         feature_dim: int,
         hidden_dim: int = 256,
-        time_channels: int = 2,
+        time_channels: int = TIME_CHANNELS_REQUIRED,
     ) -> None:
-        super().__init__()
-        if time_channels != 2:
-            raise ValueError("time_channels must be 2")
-        self.time_channels = time_channels
+        super().__init__(time_channels)
         input_dim = feature_dim + time_channels  # concatenate time inputs
         self.net = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),

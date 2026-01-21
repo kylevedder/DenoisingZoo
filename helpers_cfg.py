@@ -15,6 +15,9 @@ from dataloaders.base_dataloaders import (
     make_time_input,
     make_unified_flow_matching_input,
 )
+from constants import CFG_NULL_LABEL, TIME_CHANNELS_REQUIRED
+from model_contracts import TimeChannelModule
+from solvers.base_solver import BaseSolver
 
 
 def cfg_sample_step(
@@ -23,7 +26,7 @@ def cfg_sample_step(
     t: torch.Tensor,
     labels: torch.Tensor,
     guidance_scale: float = 1.0,
-    null_label: int = 1000,
+    null_label: int = CFG_NULL_LABEL,
     r: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Compute CFG-guided velocity at time t.
@@ -34,14 +37,13 @@ def cfg_sample_step(
         t: Time tensor (B,), (B, 1), or (B, 2)
         labels: Class labels (B,)
         guidance_scale: CFG scale w (default: 1.0 = no guidance)
-        null_label: Label value for unconditional (default: 1000)
+        null_label: Label value for unconditional (default: CFG_NULL_LABEL)
 
     Returns:
         CFG-weighted velocity (B, C, H, W)
     """
-    time_channels = int(getattr(model, "time_channels", 2))
-    if time_channels != 2:
-        raise ValueError("CFG sampling requires model.time_channels == 2")
+    if not isinstance(model, TimeChannelModule):
+        raise ValueError("CFG sampling requires TimeChannelModule model.")
 
     if t.dim() == 1:
         t = t.unsqueeze(-1)
@@ -83,7 +85,7 @@ class CFGWrapper(nn.Module):
         model: nn.Module,
         labels: torch.Tensor,
         guidance_scale: float = 1.0,
-        null_label: int = 1000,
+        null_label: int = CFG_NULL_LABEL,
     ) -> None:
         super().__init__()
         self.model = model
@@ -95,11 +97,10 @@ class CFGWrapper(nn.Module):
         """Forward with CFG applied."""
         from dataloaders.base_dataloaders import make_ununified_flow_matching_input
 
-        time_channels = int(getattr(self.model, "time_channels", 2))
-        if time_channels != 2:
-            raise ValueError("CFGWrapper requires model.time_channels == 2")
+        if not isinstance(self.model, TimeChannelModule):
+            raise ValueError("CFGWrapper requires TimeChannelModule model.")
         ununified = make_ununified_flow_matching_input(
-            unified_input, num_time_channels=2
+            unified_input, num_time_channels=TIME_CHANNELS_REQUIRED
         )
         x = ununified.x
         t = ununified.t
@@ -119,9 +120,9 @@ def generate_samples_cfg(
     labels: torch.Tensor,
     sample_shape: tuple[int, ...],
     device: torch.device,
-    solver: object,
+    solver: BaseSolver,
     guidance_scale: float = 1.0,
-    null_label: int = 1000,
+    null_label: int = CFG_NULL_LABEL,
     seed: int | None = None,
 ) -> torch.Tensor:
     """Generate samples with CFG using an ODE solver.
@@ -152,16 +153,8 @@ def generate_samples_cfg(
     # Wrap model with CFG
     cfg_model = CFGWrapper(model, labels, guidance_scale, null_label)
 
-    # Replace solver's model temporarily
-    original_model = solver._model
-    solver._model = cfg_model
-
-    try:
-        result = solver.solve(x0)
-        samples = result.final_state
-    finally:
-        # Restore original model
-        solver._model = original_model
+    result = solver.solve_with_model(cfg_model, x0)
+    samples = result.final_state
 
     return samples
 
@@ -172,7 +165,7 @@ def generate_samples_meanflow_cfg(
     sample_shape: tuple[int, ...],
     device: torch.device,
     guidance_scale: float = 1.0,
-    null_label: int = 1000,
+    null_label: int = CFG_NULL_LABEL,
     seed: int | None = None,
     r: float = 0.0,
     t: float = 1.0,
@@ -206,11 +199,8 @@ def generate_samples_meanflow_cfg(
     z = torch.randn((B, *sample_shape), device=device, generator=rng)
 
     # Create time tensor
-    time_channels = int(getattr(model, "time_channels", 2))
-    if time_channels != 2:
-        raise ValueError(
-            "MeanFlow CFG sampling requires model.time_channels == 2 to provide (r, t)."
-        )
+    if not isinstance(model, TimeChannelModule):
+        raise ValueError("MeanFlow CFG sampling requires TimeChannelModule model.")
     r_tensor = torch.full((B, 1), r, device=device, dtype=z.dtype)
     t_tensor = torch.full((B, 1), t, device=device, dtype=z.dtype)
 

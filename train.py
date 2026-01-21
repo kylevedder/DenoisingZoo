@@ -26,6 +26,8 @@ from helpers import (
     save_if_needed,
     evaluate_epoch_energy_distance,
     load_checkpoint,
+    has_mps_backend,
+    is_mps_available,
 )
 from losses.meanflow_loss import MeanFlowLoss
 from hydra.utils import instantiate
@@ -154,10 +156,8 @@ def train(cfg: DictConfig) -> None:
 
     # Runtime environment diagnostics
     print(f"torch version: {torch.__version__}")
-    has_mps = bool(getattr(torch.backends, "mps", None))
-    mps_available = bool(has_mps and torch.backends.mps.is_available())
-    print(f"mps backend present: {has_mps}")
-    print(f"mps available: {mps_available}")
+    print(f"mps backend present: {has_mps_backend()}")
+    print(f"mps available: {is_mps_available()}")
 
     device = build_device(cfg.get("device", "cuda"))
     settings = build_precision_settings(cfg.get("precision", "fp32"), device)

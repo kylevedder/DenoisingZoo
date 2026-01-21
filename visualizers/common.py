@@ -15,10 +15,11 @@ from dataloaders.base_dataloaders import (
     make_time_input,
     make_unified_flow_matching_input,
 )
+from helpers import is_mps_available
 
 
 def get_device() -> torch.device:
-    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+    if is_mps_available():
         return torch.device("mps")
     if torch.cuda.is_available():
         return torch.device("cuda")
@@ -170,8 +171,8 @@ def mp4_to_gif(mp4_path: str, gif_path: str, fps: int = 20) -> None:
     # Cleanup palette
     try:
         Path(palette_path).unlink(missing_ok=True)
-    except Exception:
-        pass
+    except OSError as exc:
+        print(f"Warning: failed to remove palette file: {exc}")
 
 
 def tensor_to_display_image(x: torch.Tensor) -> np.ndarray:

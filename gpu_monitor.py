@@ -50,6 +50,10 @@ class GPUMetricsMonitor:
     _stop_event: threading.Event = field(default_factory=threading.Event, init=False)
     _thread: threading.Thread | None = field(default=None, init=False)
     _process: subprocess.Popen | None = field(default=None, init=False)
+    _warned_exception_types: set[type[BaseException]] = field(
+        default_factory=set, init=False
+    )
+    _warn_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
     def start(self) -> None:
         """Start the background monitoring thread."""
@@ -69,11 +73,14 @@ class GPUMetricsMonitor:
             try:
                 self._process.terminate()
                 self._process.wait(timeout=2.0)
-            except Exception:
+            except subprocess.TimeoutExpired as exc:
+                self._warn_once(exc, "macmon terminate timed out")
                 try:
                     self._process.kill()
-                except Exception:
-                    pass
+                except OSError as kill_exc:
+                    self._warn_once(kill_exc, "macmon kill failed")
+            except OSError as exc:
+                self._warn_once(exc, "macmon terminate failed")
             self._process = None
 
         if self._thread is not None:
@@ -97,7 +104,14 @@ class GPUMetricsMonitor:
 
         try:
             while not self._stop_event.is_set() and self._process.poll() is None:
-                line = self._process.stdout.readline()
+                stdout = self._process.stdout
+                if stdout is None:
+                    self._warn_once(
+                        RuntimeError("macmon stdout pipe is None"),
+                        "macmon stream failed",
+                    )
+                    break
+                line = stdout.readline()
                 if not line:
                     break
 
@@ -121,20 +135,28 @@ class GPUMetricsMonitor:
                 except json.JSONDecodeError:
                     continue
 
-        except Exception:
-            pass
+        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            self._warn_once(exc, "macmon stream failed")
         finally:
             if self._process is not None:
                 try:
                     self._process.terminate()
-                except Exception:
-                    pass
+                except OSError as exc:
+                    self._warn_once(exc, "macmon terminate failed")
 
     def _prune_old_readings(self) -> None:
         """Remove readings older than window_seconds. Must hold lock."""
         cutoff = time.monotonic() - self.window_seconds
         while self._readings and self._readings[0].timestamp < cutoff:
             self._readings.popleft()
+
+    def _warn_once(self, exc: BaseException, context: str) -> None:
+        exc_type = type(exc)
+        with self._warn_lock:
+            if exc_type in self._warned_exception_types:
+                return
+            self._warned_exception_types.add(exc_type)
+        print(f"[gpu_monitor] {context}: {exc}")
 
     def get_metrics(self) -> dict:
         """Get current MPS memory and rolling average GPU metrics.

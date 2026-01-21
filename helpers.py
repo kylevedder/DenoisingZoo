@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
-import os
 from tqdm import tqdm
 
 import torch
@@ -22,19 +22,26 @@ class PrecisionSettings:
     device_type: str
 
 
+def has_mps_backend() -> bool:
+    return bool(getattr(torch.backends, "mps", None))
+
+
+def is_mps_available() -> bool:
+    if not has_mps_backend():
+        return False
+    try:
+        return bool(torch.backends.mps.is_available())
+    except (AttributeError, RuntimeError) as exc:
+        print(f"Warning: MPS availability check failed: {exc}")
+        return False
+
+
 def build_device(device_str: str) -> torch.device:
     ds = device_str.lower()
     if ds == "cuda":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if ds == "mps":
-        try:
-            mps_ok = bool(
-                getattr(torch.backends, "mps", None)
-                and torch.backends.mps.is_available()
-            )
-        except Exception:
-            mps_ok = False
-        return torch.device("mps" if mps_ok else "cpu")
+        return torch.device("mps" if is_mps_available() else "cpu")
     return torch.device(ds)
 
 
@@ -163,14 +170,15 @@ def build_criterion(
 
 
 def save_checkpoint(
-    path: str,
+    path: str | Path,
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
     scaler: torch.amp.GradScaler | None,
     epoch: int,
     cfg: DictConfig,
 ) -> None:
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    path_obj = Path(path)
+    path_obj.parent.mkdir(parents=True, exist_ok=True)
     state: dict[str, Any] = {
         "epoch": int(epoch),
         "model": model.state_dict(),
@@ -180,11 +188,11 @@ def save_checkpoint(
         "config": OmegaConf.to_container(cfg, resolve=True),
         "torch_version": torch.__version__,
     }
-    torch.save(state, path)
+    torch.save(state, path_obj)
 
 
 def load_checkpoint(
-    path: str,
+    path: str | Path,
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer | None = None,
     scaler: torch.amp.GradScaler | None = None,
@@ -227,10 +235,10 @@ def get_checkpoint_path(cfg: DictConfig) -> str:
     Returns the full path `<ckpt_dir>/<ckpt_name>` and creates the directory if
     needed.
     """
-    ckpt_dir: str = str(cfg.get("ckpt_dir", "outputs/ckpts"))
-    ckpt_name: str = str(cfg.get("ckpt_name", "last.pt"))
-    os.makedirs(ckpt_dir, exist_ok=True)
-    return f"{ckpt_dir}/{ckpt_name}"
+    ckpt_dir = Path(str(cfg.get("ckpt_dir", "outputs/ckpts")))
+    ckpt_name = str(cfg.get("ckpt_name", "last.pt"))
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    return str(ckpt_dir / ckpt_name)
 
 
 def resume_if_requested(
@@ -285,14 +293,12 @@ def save_if_needed(
         print(f"Saved checkpoint to {ckpt_path}")
 
         # Also archive by run name/info + epoch to keep all checkpoints
-        try:
-            run_name = str(cfg.get("run_name", "run"))
-        except Exception:
-            run_name = "run"
-        archive_dir = os.path.join(os.path.dirname(ckpt_path), "archive")
-        os.makedirs(archive_dir, exist_ok=True)
+        run_name = str(cfg.get("run_name", "run"))
+        ckpt_dir = Path(ckpt_path).parent
+        archive_dir = ckpt_dir / "archive"
+        archive_dir.mkdir(parents=True, exist_ok=True)
         archive_name = f"{run_name}_epoch_{epoch:04d}.pt"
-        archive_path = os.path.join(archive_dir, archive_name)
+        archive_path = archive_dir / archive_name
         save_checkpoint(
             path=archive_path,
             model=model,

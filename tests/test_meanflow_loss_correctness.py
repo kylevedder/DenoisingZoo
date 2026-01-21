@@ -1,18 +1,17 @@
 """Tests for MeanFlow loss correctness with time channels."""
 
 import torch
-import torch.nn as nn
 
 from losses.meanflow_loss import MeanFlowLoss
+from model_contracts import TimeChannelModule
 
 
-class LinearTimeModel(nn.Module):
+class LinearTimeModel(TimeChannelModule):
     """Deterministic model with known derivatives."""
 
     def __init__(self, feature_dim: int) -> None:
         super().__init__()
         self.feature_dim = feature_dim
-        self.time_channels = 2
 
     def forward(self, unified_input: torch.Tensor) -> torch.Tensor:
         x = unified_input[:, : self.feature_dim]
@@ -64,24 +63,16 @@ def test_meanflow_loss_matches_manual_linear_model():
 
 
 def test_meanflow_loss_requires_two_time_channels():
-    class SingleTimeModel(nn.Module):
+    class SingleTimeModel(TimeChannelModule):
         def __init__(self, feature_dim: int) -> None:
-            super().__init__()
+            super().__init__(time_channels=1)
             self.feature_dim = feature_dim
-            self.time_channels = 1
 
         def forward(self, unified_input: torch.Tensor) -> torch.Tensor:
             return unified_input[:, : self.feature_dim]
 
-    model = SingleTimeModel(feature_dim=3)
-    loss_fn = MeanFlowLoss(model=model, meanflow_ratio=0.5)
-    batch = {
-        "raw_source": torch.randn(2, 3),
-        "raw_target": torch.randn(2, 3),
-    }
-
     try:
-        _ = loss_fn(batch)
-        assert False, "Expected MeanFlowLoss to raise with time_channels < 2"
-    except RuntimeError as exc:
+        _ = SingleTimeModel(feature_dim=3)
+        assert False, "Expected model construction to raise with time_channels < 2"
+    except ValueError as exc:
         assert "time_channels" in str(exc)

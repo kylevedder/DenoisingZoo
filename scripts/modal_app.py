@@ -5,6 +5,7 @@ Modal application for remote training on NVIDIA GPUs.
 import os
 import sys
 import subprocess
+from pathlib import Path
 import modal
 
 
@@ -54,22 +55,23 @@ image = (
 def train_on_modal(extra_args: list[str]) -> None:
     """Run training on Modal with NVIDIA GPU."""
     # Workdir contains our code baked into the image
-    os.chdir("/root/app")
+    app_dir = Path("/root/app")
+    os.chdir(app_dir)
 
     # If a pre-uploaded archive exists in the persisted volume, extract it
     try:
-        if os.path.exists("/data/celeba.tar.gz") and not os.path.exists("/data/celeba"):
+        data_dir = Path("/data")
+        archive = data_dir / "celeba.tar.gz"
+        extracted = data_dir / "celeba"
+        if archive.exists() and not extracted.exists():
             print("[modal] Found /data/celeba.tar.gz in volume, extracting...")
+            data_dir.mkdir(parents=True, exist_ok=True)
             subprocess.run(
-                [
-                    "bash",
-                    "-lc",
-                    "mkdir -p /data && tar -xzf /data/celeba.tar.gz -C /data",
-                ],
+                ["tar", "-xzf", str(archive), "-C", str(data_dir)],
                 check=True,
             )
-    except Exception as e:
-        print(f"[modal] Warning: dataset extraction skipped: {e}")
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"[modal] Warning: dataset extraction skipped: {exc}")
 
     # Verify GPU availability
     import torch
@@ -81,7 +83,7 @@ def train_on_modal(extra_args: list[str]) -> None:
         print(f"Current device: {torch.cuda.current_device()}")
         print(f"Device name: {torch.cuda.get_device_name()}")
 
-    os.makedirs("outputs/ckpts", exist_ok=True)
+    Path("outputs/ckpts").mkdir(parents=True, exist_ok=True)
 
     # Ensure dataset roots use the persisted volume unless explicitly overridden
     args = list(extra_args)

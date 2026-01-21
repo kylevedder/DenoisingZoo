@@ -13,6 +13,7 @@ from dataloaders.base_dataloaders import (
     make_time_input,
     make_unified_flow_matching_input,
 )
+from model_contracts import TimeChannelModule
 
 
 def generate_samples(
@@ -117,11 +118,8 @@ def generate_samples_meanflow(
                 generator=rng,
             )
 
-            time_channels = int(getattr(model, "time_channels", 2))
-            if time_channels != 2:
-                raise ValueError(
-                    "MeanFlow sampling requires model.time_channels == 2 to provide (r, t)."
-                )
+            if not isinstance(model, TimeChannelModule):
+                raise ValueError("MeanFlow sampling requires TimeChannelModule model.")
 
             # Build time tensor for (r, t)
             r_tensor = torch.full(

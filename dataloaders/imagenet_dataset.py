@@ -20,6 +20,7 @@ from dataloaders.base_dataloaders import (
     make_time_input,
     make_unified_flow_matching_input,
 )
+from constants import CFG_NULL_LABEL
 
 
 @dataclass
@@ -50,7 +51,7 @@ class ImageNetDataset(BaseDataset):
         seed: Random seed for sampling
         subset_length: If provided, use only first N samples
         label_dropout: Probability of dropping label (for CFG training, default: 0.0)
-        null_label: Label value to use when dropped (default: 1000)
+        null_label: Label value to use when dropped (default: CFG_NULL_LABEL)
     """
 
     NUM_CLASSES = 1000
@@ -64,7 +65,7 @@ class ImageNetDataset(BaseDataset):
         seed: int = 42,
         subset_length: int | None = None,
         label_dropout: float = 0.0,
-        null_label: int = 1000,
+        null_label: int = CFG_NULL_LABEL,
     ) -> None:
         self._root = Path(root)
         self._split = split

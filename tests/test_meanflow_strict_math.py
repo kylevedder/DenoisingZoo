@@ -252,20 +252,23 @@ class TestStrictMeanFlowMath:
         # polynomial field from r=0 to t=1.
         # z1(1) - z1(0) = z1(0) * (e^0.5 - 1)
         # z2(1) - z2(0) = z2(0)^2 / (1 - z2(0))
-        class PerfectAverageVelocityModel(nn.Module):
+        from model_contracts import TimeChannelModule
+
+        class PerfectAverageVelocityModel(TimeChannelModule):
             def __init__(self):
                 super().__init__()
 
             def forward(self, unified_input):
-                # unified is (B, D+1)
+                # unified is (B, D+2)
                 z = unified_input[:, :2]
-                t_in = unified_input[:, 2:3]  # This should be 'r' (0.0)
+                times = unified_input[:, 2:]
+                r_in = times[:, 0:1]  # This should be 'r' (0.0)
 
                 # Check that we are receiving r=0
-                if not torch.allclose(t_in, torch.zeros_like(t_in)):
+                if not torch.allclose(r_in, torch.zeros_like(r_in)):
                     # If we receive t=1, the logic is wrong
                     print(
-                        f"Warning: Model received t={t_in.mean().item()}, expected 0.0"
+                        f"Warning: Model received r={r_in.mean().item()}, expected 0.0"
                     )
 
                 z1 = z[:, 0:1]

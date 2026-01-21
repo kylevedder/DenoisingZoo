@@ -14,6 +14,7 @@ from typing import List
 import torch
 from datetime import datetime
 
+from helpers import has_mps_backend, is_mps_available
 
 def check_uv_available() -> bool:
     """Check if uv is available in the system."""
@@ -52,9 +53,8 @@ def detect_device() -> str:
         return "cuda"
 
     # Check MPS availability (Apple Silicon)
-    mps_available = bool(
-        getattr(torch.backends, "mps", None) and torch.backends.mps.is_available()
-    )
+    print(f"MPS backend present: {has_mps_backend()}")
+    mps_available = is_mps_available()
     print(f"MPS available: {mps_available}")
     if mps_available:
         return "mps"

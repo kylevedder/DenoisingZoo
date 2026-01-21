@@ -8,7 +8,6 @@ import os
 import sys
 import subprocess
 from pathlib import Path
-import subprocess
 
 try:
     import modal
@@ -35,8 +34,9 @@ def check_modal_auth() -> bool:
                 ["modal", "token", "whoami"], check=True, capture_output=True
             )
             return True
-        except Exception:
+        except (subprocess.CalledProcessError, FileNotFoundError) as exc:
             # File exists but verification failed; still consider present and let Modal surface details later
+            print(f"Warning: modal token whoami failed: {exc}")
             return True
 
     print("Modal authentication not found.")

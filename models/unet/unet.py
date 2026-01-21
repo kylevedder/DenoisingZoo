@@ -13,6 +13,9 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from constants import TIME_CHANNELS_REQUIRED
+from model_contracts import TimeChannelModule
+
 from dataloaders.base_dataloaders import make_ununified_flow_matching_input
 
 
@@ -154,7 +157,7 @@ class SelfAttention(nn.Module):
         return x + self.proj(out)
 
 
-class UNet(nn.Module):
+class UNet(TimeChannelModule):
     """UNet for diffusion/flow matching models.
 
     Architecture following ADM/Improved Diffusion:
@@ -181,7 +184,7 @@ class UNet(nn.Module):
         in_channels: int = 3,
         out_channels: int | None = None,
         base_channels: int = 128,
-        time_channels: int = 2,
+        time_channels: int = TIME_CHANNELS_REQUIRED,
         channel_mult: Sequence[int] = (1, 2, 2, 2),
         num_res_blocks: int = 2,
         attention_resolutions: Sequence[int] = (16,),
@@ -189,13 +192,10 @@ class UNet(nn.Module):
         num_heads: int = 4,
         input_resolution: int = 32,
     ) -> None:
-        super().__init__()
+        super().__init__(time_channels)
 
         if out_channels is None:
             out_channels = in_channels
-        if time_channels != 2:
-            raise ValueError("time_channels must be 2")
-
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.base_channels = base_channels

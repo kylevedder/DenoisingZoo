@@ -8,6 +8,7 @@ from dataloaders.base_dataloaders import (
     make_time_input,
     make_unified_flow_matching_input,
 )
+from model_contracts import TimeChannelModule
 
 
 class RK4Solver(BaseSolver):
@@ -25,9 +26,8 @@ class RK4Solver(BaseSolver):
     @torch.no_grad()
     def solve(self, initial_state: torch.Tensor) -> FlowSolveResult:
         x = initial_state
-        time_channels = int(getattr(self._model, "time_channels", 2))
-        if time_channels != 2:
-            raise ValueError("Solver requires model.time_channels == 2")
+        if not isinstance(self._model, TimeChannelModule):
+            raise ValueError("Solver requires TimeChannelModule model.")
 
         dt = float(self._t_end - self._t_start) / float(self._num_steps)
         t_schedule = np.linspace(self._t_start, self._t_end, self._num_steps + 1)

@@ -1,18 +1,17 @@
 """Tests for MeanFlow sampling logic."""
 
 import torch
-import torch.nn as nn
 
 from evaluation.sample import generate_samples_meanflow
+from model_contracts import TimeChannelModule
 
 
-class TimeAwareModel(nn.Module):
+class TimeAwareModel(TimeChannelModule):
     """Simple model that depends on r and t."""
 
     def __init__(self, feature_dim: int) -> None:
         super().__init__()
         self.feature_dim = feature_dim
-        self.time_channels = 2
 
     def forward(self, unified_input: torch.Tensor) -> torch.Tensor:
         x = unified_input[:, : self.feature_dim]

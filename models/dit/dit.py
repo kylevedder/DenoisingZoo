@@ -13,6 +13,9 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from constants import TIME_CHANNELS_REQUIRED
+from model_contracts import TimeChannelModule
+
 from dataloaders.base_dataloaders import make_ununified_flow_matching_input
 
 
@@ -228,7 +231,7 @@ class FinalLayer(nn.Module):
         return x
 
 
-class DiT(nn.Module):
+class DiT(TimeChannelModule):
     """Diffusion Transformer for flow matching / diffusion models.
 
     Args:
@@ -249,7 +252,7 @@ class DiT(nn.Module):
         input_size: int = 32,
         patch_size: int = 2,
         in_channels: int = 4,
-        time_channels: int = 2,
+        time_channels: int = TIME_CHANNELS_REQUIRED,
         hidden_size: int = 1152,
         depth: int = 28,
         num_heads: int = 16,
@@ -258,9 +261,7 @@ class DiT(nn.Module):
         learn_sigma: bool = False,
         class_dropout_prob: float = 0.1,
     ) -> None:
-        super().__init__()
-        if time_channels != 2:
-            raise ValueError("time_channels must be 2")
+        super().__init__(time_channels)
         self.input_size = input_size
         self.patch_size = patch_size
         self.in_channels = in_channels

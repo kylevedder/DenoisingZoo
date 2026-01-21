@@ -34,3 +34,13 @@ class BaseSolver(ABC):
         self, initial_state: torch.Tensor
     ) -> FlowSolveResult:  # pragma: no cover - abstract contract
         pass
+
+    def solve_with_model(
+        self, model: VectorFieldModel, initial_state: torch.Tensor
+    ) -> FlowSolveResult:
+        original_model = self._model
+        self._model = model
+        try:
+            return self.solve(initial_state)
+        finally:
+            self._model = original_model

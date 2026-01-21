@@ -16,6 +16,7 @@ from dataloaders.base_dataloaders import (
     make_time_input,
     make_unified_flow_matching_input,
 )
+from model_contracts import TimeChannelModule
 
 
 class SimpleMLP(nn.Module):
@@ -35,14 +36,11 @@ class SimpleMLP(nn.Module):
         return self.net(x)
 
 
-class SimpleCNN(nn.Module):
+class SimpleCNN(TimeChannelModule):
     """Simple CNN for testing."""
 
     def __init__(self, in_channels: int, hidden_channels: int, time_channels: int = 2):
-        super().__init__()
-        if time_channels != 2:
-            raise ValueError("time_channels must be 2")
-        self.time_channels = time_channels
+        super().__init__(time_channels)
         self.net = nn.Sequential(
             nn.Conv2d(in_channels + time_channels, hidden_channels, 3, padding=1),
             nn.SiLU(),
