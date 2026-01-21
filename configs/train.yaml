@@ -9,6 +9,7 @@ defaults:
 device: mps          # choices: cpu, cuda, mps (on Apple)
 precision: fp32       # choices: fp32, bf16, fp16
 compile: false        # torch.compile the model (may speed up training)
+compile_mode: default # torch.compile mode: default, reduce-overhead, max-autotune
 
 # Training
 epochs: 10

@@ -138,7 +138,15 @@ Enable `torch.compile` for potential speedups via kernel fusion:
 
 ```bash
 python launcher.py run_name=my_experiment compile=true
+
+# With specific compile mode
+python launcher.py run_name=my_experiment compile=true compile_mode=max-autotune
 ```
+
+**Compile modes:**
+- `default` - balanced compilation (recommended starting point)
+- `reduce-overhead` - reduces Python overhead, good for small batches
+- `max-autotune` - tries more kernel configs, slower compile but potentially faster runtime
 
 **Notes:**
 - Default is `compile=false` (off)
@@ -147,6 +155,14 @@ python launcher.py run_name=my_experiment compile=true
 - Compiled models are automatically unwrapped for type checks and checkpoint naming
 
 **When to use:** Try `compile=true` when GPU utilization is low or training is CPU-bound. May help fuse small kernels on MPS.
+
+### CUDA Performance Optimizations
+
+On CUDA devices, the following optimizations are automatically enabled:
+- **TF32 matmul** (`torch.set_float32_matmul_precision("high")`) - uses TensorFloat-32 on Ampere+ GPUs for ~3x faster matmuls with minimal precision loss
+- **cuDNN benchmark** (`torch.backends.cudnn.benchmark = True`) - auto-tunes convolution algorithms for specific input sizes
+
+These are enabled automatically when `device=cuda` - no config needed.
 
 ### Remote Training (Modal)
 ```bash

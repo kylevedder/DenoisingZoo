@@ -212,6 +212,17 @@ def train(cfg: DictConfig) -> None:
     device = build_device(cfg.get("device", "cuda"))
     settings = build_precision_settings(cfg.get("precision", "fp32"), device)
     print(f"selected device: {device}")
+
+    # CUDA-specific performance optimizations
+    if device.type == "cuda":
+        # Use TF32 for matmuls on Ampere+ GPUs (significant speedup, minimal precision loss)
+        torch.set_float32_matmul_precision("high")
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        # Auto-tune convolution algorithms for the specific input sizes
+        torch.backends.cudnn.benchmark = True
+        print("CUDA optimizations enabled: TF32 matmul, cuDNN benchmark")
+
     if device.type == "mps":
         sample = torch.ones(1, device=device)
         print(f"sample tensor device: {sample.device}")
@@ -225,8 +236,9 @@ def train(cfg: DictConfig) -> None:
 
     # Optionally compile model for faster training
     if cfg.get("compile", False):
-        print("Compiling model with torch.compile...")
-        model = torch.compile(model)
+        compile_mode = cfg.get("compile_mode", "default")
+        print(f"Compiling model with torch.compile (mode={compile_mode})...")
+        model = torch.compile(model, mode=compile_mode)
         print("Model compiled")
 
     # Derive architecture-specific checkpoint directory: outputs/ckpts/<arch>
