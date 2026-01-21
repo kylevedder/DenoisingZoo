@@ -308,6 +308,29 @@ Key files:
 - Archive: `outputs/ckpts/<arch>/archive/<run_name>_epoch_XXXX.pt`
 - Checkpoints embed full resolved config for reproducibility
 
+**Cleaning up test/debug checkpoints:**
+
+UNet checkpoints are ~580MB each and accumulate quickly. Periodically clean up test experiments:
+
+```bash
+# Check disk usage
+du -sh outputs/ckpts/*/archive/
+
+# List unique experiment names
+ls outputs/ckpts/unet/archive/ | sed 's/_epoch_[0-9]*\.pt$//' | sort -u
+
+# Count checkpoints and size per experiment
+for run in $(ls outputs/ckpts/unet/archive/ | sed 's/_epoch_[0-9]*\.pt$//' | sort -u); do
+  count=$(ls outputs/ckpts/unet/archive/${run}_epoch_*.pt 2>/dev/null | wc -l | tr -d ' ')
+  size=$(du -ch outputs/ckpts/unet/archive/${run}_epoch_*.pt 2>/dev/null | tail -1 | cut -f1)
+  printf "%-30s %3s ckpts  %s\n" "$run" "$count" "$size"
+done
+
+# Delete checkpoints for a specific experiment
+rm outputs/ckpts/unet/archive/test_*.pt
+rm outputs/ckpts/unet/archive/debug_*.pt
+```
+
 ### Adding New Components
 Extend by subclassing and adding a Hydra config:
 - Models: subclass `nn.Module`, add config in `configs/model/`
