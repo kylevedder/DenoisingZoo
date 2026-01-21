@@ -328,6 +328,45 @@ uv run python launcher.py dataloaders=cifar10 model=unet loss=meanflow epochs=5 
 
 ---
 
+### Experiment 4.0b: CIFAR-10 MeanFlow (ratio=0.25, 5 epochs)
+
+**Status:** IN PROGRESS
+
+**Goal:** Test MeanFlow with moderate ratio on CIFAR-10.
+
+**Command:**
+```bash
+uv run python launcher.py dataloaders=cifar10 model=unet loss=meanflow epochs=5 \
+  loss.meanflow_ratio=0.25 loss.logit_normal_mean=-2.0 loss.logit_normal_std=2.0 \
+  loss.weighting_power=0.75 precision=bf16 run_name=cifar10_ratio025_test
+```
+
+**Run Log:**
+- 2026-01-20: Started with ratio=0.25, batch_size=64
+- Speed: ~10s/batch (vs 2.5s/batch for ratio=0, ~25s/batch for ratio=0.75)
+- Loss dropping: 1.27 → 0.62 after 21 batches
+
+**MPS Performance Notes:**
+| Ratio | Speed (s/batch) | Relative | Notes |
+|-------|-----------------|----------|-------|
+| 0.0 | ~2.5s | 1x | Standard FM, no JVP |
+| 0.25 | ~10-40s | 4-16x | 25% samples need JVP, degrades with memory pressure |
+| 0.75 | ~25s+ | 10x+ | 75% samples need JVP, extremely slow |
+
+**Results (partial, 30 batches):**
+- Loss: 1.27 → 0.53 (decreasing correctly)
+- Training is working but impractically slow
+
+**Conclusion:** MeanFlow with ratio>0 is not feasible on MPS for full experiments. JVP computation causes 4-16x slowdown that worsens with memory pressure. **Full MeanFlow experiments require CUDA GPU or Modal cloud compute.**
+
+Key takeaways:
+1. **ratio=0 works well on MPS** - standard FM baseline is practical
+2. **ratio>0 requires CUDA** - JVP overhead is prohibitive on MPS
+3. **Architecture changes verified** - separate time embeddings implemented correctly
+4. **FID script ready** - can evaluate when we have checkpoints from cloud runs
+
+---
+
 ### Experiment 4.1: CIFAR-10 Official Config (Short Run)
 
 **Status:** PROPOSED
