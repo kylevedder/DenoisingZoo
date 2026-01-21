@@ -40,8 +40,8 @@ class SimpleCNN(nn.Module):
 
     def __init__(self, in_channels: int, hidden_channels: int, time_channels: int = 2):
         super().__init__()
-        if time_channels < 1:
-            raise ValueError("time_channels must be >= 1")
+        if time_channels != 2:
+            raise ValueError("time_channels must be 2")
         self.time_channels = time_channels
         self.net = nn.Sequential(
             nn.Conv2d(in_channels + time_channels, hidden_channels, 3, padding=1),

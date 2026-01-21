@@ -193,8 +193,8 @@ class UNet(nn.Module):
 
         if out_channels is None:
             out_channels = in_channels
-        if time_channels < 1:
-            raise ValueError("time_channels must be >= 1")
+        if time_channels != 2:
+            raise ValueError("time_channels must be 2")
 
         self.in_channels = in_channels
         self.out_channels = out_channels

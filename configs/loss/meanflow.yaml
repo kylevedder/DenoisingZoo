@@ -5,3 +5,4 @@ logit_normal_std: 1.0
 weighting_power: 0.5
 weighting_const: 0.0001
 eps: 0.00001
+use_batch_time: false

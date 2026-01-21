@@ -52,13 +52,13 @@ def test_meanflow_loss_matches_manual_linear_model():
     # Model prediction u(z_t, r, t)
     u_pred = 2.0 * z_t + 3.0 * r + 5.0 * t
 
-    # v(z_t, t) = u(z_t, r=t, t) = 2*z_t + 8*t
-    v_t = 2.0 * z_t + 8.0 * t
-    jvp = 2.0 * v_t + 8.0
+    # v(z_t, t) uses the flow-matching convention (t, 1) for time input
+    v_t = 2.0 * z_t + 3.0 * t + 5.0
+    jvp = 2.0 * v_t + 3.0
 
     u_tgt = v_t - (t - r) * jvp
     diff = u_pred - u_tgt
-    expected_loss = (diff ** 2).sum(dim=1).mean()
+    expected_loss = (diff ** 2).mean(dim=1).mean()
 
     assert torch.allclose(loss, expected_loss, atol=1e-6)
 

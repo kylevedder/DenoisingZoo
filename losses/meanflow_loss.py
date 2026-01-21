@@ -30,6 +30,7 @@ class MeanFlowLoss(nn.Module):
         weighting_power: Power p for adaptive weighting w = 1/(||Δ||² + c)^p (default: 0.5)
         weighting_const: Constant c for adaptive weighting (default: 1e-4)
         eps: Small epsilon for numerical stability (default: 1e-5)
+        use_batch_time: If True, prefer batch-provided t when available
     """
 
     def __init__(
@@ -41,6 +42,7 @@ class MeanFlowLoss(nn.Module):
         weighting_power: float = 0.5,
         weighting_const: float = 1e-4,
         eps: float = 1e-5,
+        use_batch_time: bool = False,
     ) -> None:
         super().__init__()
         self._model = model
@@ -50,6 +52,7 @@ class MeanFlowLoss(nn.Module):
         self.weighting_power = weighting_power
         self.weighting_const = weighting_const
         self.eps = eps
+        self.use_batch_time = use_batch_time
 
     def set_model(self, model: nn.Module) -> None:
         """Set the model for loss computation (called by training loop)."""
@@ -97,8 +100,24 @@ class MeanFlowLoss(nn.Module):
         B = x.shape[0]
         dtype = x.dtype
 
-        # Sample time t from logit-normal
-        t = self._sample_logit_normal((B, 1), x.device, dtype)
+        # Sample time t from logit-normal (or use batch-provided t)
+        if self.use_batch_time and "t" in batch:
+            t = batch["t"]
+            if device is not None:
+                t = t.to(device, non_blocking=True)
+            t = t.to(dtype=dtype)
+            if t.dim() == 1:
+                t = t.view(-1, 1)
+            else:
+                t = t.reshape(t.shape[0], -1)
+            if t.shape[0] != B:
+                raise ValueError(
+                    f"Batch time size {t.shape[0]} does not match batch size {B}"
+                )
+            if t.shape[1] != 1:
+                raise ValueError("Batch time must have a single column.")
+        else:
+            t = self._sample_logit_normal((B, 1), x.device, dtype)
 
         # Determine which samples use r != t (MeanFlow) vs r = t (standard FM)
         use_meanflow = torch.rand(B, 1, device=x.device, dtype=dtype) < self.meanflow_ratio
@@ -109,24 +128,37 @@ class MeanFlowLoss(nn.Module):
         r = torch.where(use_meanflow, r_uniform, t)
 
         time_channels = int(getattr(self._model, "time_channels", 2))
-        if self.meanflow_ratio > 0 and time_channels < 2:
+        if time_channels != 2:
             raise RuntimeError(
-                "MeanFlow requires model.time_channels >= 2 to provide (r, t) conditioning."
+                "MeanFlowLoss requires model.time_channels == 2 for (r, t) conditioning."
             )
 
         # Compute interpolated state at time t
         # z_t = (1 - t) * x + t * y
-        t_b = self._broadcast_time(t, x)
-        z_t = (1 - t_b) * x + t_b * y
+        if self.use_batch_time and "input" in batch:
+            z_t = batch["input"]
+            if device is not None:
+                z_t = z_t.to(device, non_blocking=True)
+            z_t = z_t.to(dtype=dtype)
+        else:
+            t_b = self._broadcast_time(t, x)
+            z_t = (1 - t_b) * x + t_b * y
 
         # Ground truth velocity
         v_true = y - x
 
-        # Compute model predictions
-        time_pred = make_time_input(t, r=r, time_channels=time_channels)
+        # Compute model predictions.
+        # For standard FM samples, time input should be (t, 1).
+        # For MeanFlow samples, time input should be (r, t).
+        time_pred = make_time_input(t)
+        if use_meanflow.any():
+            time_pred = time_pred.clone()
+            mf_mask = use_meanflow.squeeze(-1)
+            time_pred[mf_mask, 0:1] = r[mf_mask]
+            time_pred[mf_mask, 1:2] = t[mf_mask]
         unified_t = make_unified_flow_matching_input(z_t, time_pred)
 
-        # Always compute u(z_t, r, t)
+        # Always compute u(z_t, r, t) for MeanFlow samples and v(z_t, t) for FM samples
         v_pred = self._model(unified_t)
 
         # Compute target for MeanFlow samples
@@ -148,9 +180,7 @@ class MeanFlowLoss(nn.Module):
             r_mf = r[mf_mask]
 
             def model_fn_mf(z: torch.Tensor, t_input: torch.Tensor) -> torch.Tensor:
-                time_input = make_time_input(
-                    t_input, r=t_input, time_channels=time_channels
-                )
+                time_input = make_time_input(t_input)
                 unified = make_unified_flow_matching_input(z, time_input)
                 return self._model(unified)
 
@@ -180,7 +210,7 @@ class MeanFlowLoss(nn.Module):
 
         # Compute loss with adaptive weighting
         diff = v_pred - u_tgt
-        sq_error = (diff ** 2).flatten(1).sum(dim=1)  # (B,)
+        sq_error = (diff ** 2).flatten(1).mean(dim=1)  # (B,)
 
         # Adaptive weighting: w = 1 / (||delta||² + c)^p
         # where delta = u_tgt - v_true
@@ -210,6 +240,7 @@ class MeanFlowLoss(nn.Module):
             # Generic case
             shape = [t.shape[0]] + [1] * (like.dim() - 1)
             return t.view(*shape)
+
 
 
 class MeanFlowLossWrapper(nn.Module):

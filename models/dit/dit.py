@@ -259,8 +259,8 @@ class DiT(nn.Module):
         class_dropout_prob: float = 0.1,
     ) -> None:
         super().__init__()
-        if time_channels < 1:
-            raise ValueError("time_channels must be >= 1")
+        if time_channels != 2:
+            raise ValueError("time_channels must be 2")
         self.input_size = input_size
         self.patch_size = patch_size
         self.in_channels = in_channels

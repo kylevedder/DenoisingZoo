@@ -118,9 +118,9 @@ def generate_samples_meanflow(
             )
 
             time_channels = int(getattr(model, "time_channels", 2))
-            if time_channels < 2:
+            if time_channels != 2:
                 raise ValueError(
-                    "MeanFlow sampling requires model.time_channels >= 2 to provide (r, t)."
+                    "MeanFlow sampling requires model.time_channels == 2 to provide (r, t)."
                 )
 
             # Build time tensor for (r, t)
@@ -130,9 +130,7 @@ def generate_samples_meanflow(
             t_tensor = torch.full(
                 (current_batch, 1), t, device=device, dtype=z.dtype
             )
-            time_input = make_time_input(
-                t_tensor, r=r_tensor, time_channels=time_channels
-            )
+            time_input = make_time_input(t_tensor, r=r_tensor)
 
             # Build unified input
             unified = make_unified_flow_matching_input(z, time_input)

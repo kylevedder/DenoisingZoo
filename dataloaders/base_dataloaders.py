@@ -68,7 +68,7 @@ def make_time_input(
     Args:
         t: Time tensor of shape (B,), (B, 1), or (B, K)
         r: Optional start time tensor (B,) or (B, 1) when time_channels=2
-        time_channels: Number of time channels to produce (1 or 2)
+        time_channels: Number of time channels to produce (must be 2)
         end_time: Optional end time (float or tensor) when time_channels=2 and r is None
 
     Returns:
@@ -80,53 +80,45 @@ def make_time_input(
             raise ValueError("Time tensor must include a batch dimension.")
         return value.reshape(value.shape[0], -1)
 
+    if time_channels != 2:
+        raise ValueError("time_channels must be 2")
+
     t_flat = _reshape_time(t)
-
-    if time_channels == 1:
-        if t_flat.shape[1] != 1:
-            raise ValueError(
-                f"time_channels=1 expects a single time column, got {t_flat.shape[1]}"
-            )
-        return t_flat.to(dtype=t.dtype, device=t.device)
-
-    if time_channels == 2:
-        if r is None:
-            if t_flat.shape[1] == 2:
-                return t_flat.to(dtype=t.dtype, device=t.device)
-            if t_flat.shape[1] == 1:
-                if end_time is None:
-                    end_value = torch.ones_like(t_flat)
-                elif isinstance(end_time, torch.Tensor):
-                    end_value = _reshape_time(end_time).to(
-                        dtype=t.dtype, device=t.device
-                    )
-                    if end_value.shape[0] != t_flat.shape[0]:
-                        raise ValueError(
-                            "end_time must match batch size when provided as a tensor."
-                        )
-                    if end_value.shape[1] != 1:
-                        raise ValueError("end_time tensor must have a single column.")
-                else:
-                    end_value = torch.full_like(t_flat, float(end_time))
-                return torch.cat([t_flat, end_value], dim=1).to(
+    if r is None:
+        if t_flat.shape[1] == 2:
+            return t_flat.to(dtype=t.dtype, device=t.device)
+        if t_flat.shape[1] == 1:
+            if end_time is None:
+                end_value = torch.ones_like(t_flat)
+            elif isinstance(end_time, torch.Tensor):
+                end_value = _reshape_time(end_time).to(
                     dtype=t.dtype, device=t.device
                 )
-            raise ValueError(
-                "time_channels=2 expects t with 1 or 2 columns when r is None."
+                if end_value.shape[0] != t_flat.shape[0]:
+                    raise ValueError(
+                        "end_time must match batch size when provided as a tensor."
+                    )
+                if end_value.shape[1] != 1:
+                    raise ValueError("end_time tensor must have a single column.")
+            else:
+                end_value = torch.full_like(t_flat, float(end_time))
+            return torch.cat([t_flat, end_value], dim=1).to(
+                dtype=t.dtype, device=t.device
             )
+        raise ValueError(
+            "time_channels=2 expects t with 1 or 2 columns when r is None."
+        )
 
-        r_flat = _reshape_time(r).to(dtype=t.dtype, device=t.device)
-        if t_flat.shape[1] != 1 or r_flat.shape[1] != 1:
-            raise ValueError(
-                "time_channels=2 expects r and t to have a single column each."
-            )
-        if r_flat.shape[0] != t_flat.shape[0]:
-            raise ValueError(
-                f"Batch size mismatch between r ({r_flat.shape[0]}) and t ({t_flat.shape[0]})"
-            )
-        return torch.cat([r_flat[:, :1], t_flat[:, :1]], dim=1)
-
-    raise ValueError(f"Unsupported time_channels value: {time_channels}")
+    r_flat = _reshape_time(r).to(dtype=t.dtype, device=t.device)
+    if t_flat.shape[1] != 1 or r_flat.shape[1] != 1:
+        raise ValueError(
+            "time_channels=2 expects r and t to have a single column each."
+        )
+    if r_flat.shape[0] != t_flat.shape[0]:
+        raise ValueError(
+            f"Batch size mismatch between r ({r_flat.shape[0]}) and t ({t_flat.shape[0]})"
+        )
+    return torch.cat([r_flat[:, :1], t_flat[:, :1]], dim=1)
 
 
 def make_unified_flow_matching_input(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
@@ -166,12 +158,14 @@ def make_ununified_flow_matching_input(
 ) -> UnunifiedFlowMatchingInput:
     """Invert make_unified_flow_matching_input.
 
+    Requires num_time_channels=2 (r, t).
+
     - If unified is (B, D+T): returns x=(B, D) and t=(B, T)
     - If unified is (B, C+T, H, W): returns x=(B, C, H, W) and t=(B, T)
       where t is the spatial mean of the appended time channels (constant by construction).
     """
-    if num_time_channels < 1:
-        raise ValueError("num_time_channels must be >= 1")
+    if num_time_channels != 2:
+        raise ValueError("num_time_channels must be 2")
     if unified.dim() == 2:
         if unified.shape[1] <= num_time_channels:
             raise ValueError(

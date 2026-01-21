@@ -9,7 +9,7 @@ class SmallCNN(nn.Module):
 
     Expects:
       - x: (batch, channels, height, width)
-      - t: (batch, 1)
+      - time inputs: two channels appended to the image
 
     Conditioning on time is performed by concatenating a broadcast time channel
     to the image input. The network predicts a per-pixel velocity with the same
@@ -31,8 +31,8 @@ class SmallCNN(nn.Module):
 
         if num_layers < 2:
             raise ValueError("num_layers must be >= 2")
-        if time_channels < 1:
-            raise ValueError("time_channels must be >= 1")
+        if time_channels != 2:
+            raise ValueError("time_channels must be 2")
 
         padding = kernel_size // 2
         layers: list[nn.Module] = []

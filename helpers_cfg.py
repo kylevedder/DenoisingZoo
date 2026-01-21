@@ -40,6 +40,8 @@ def cfg_sample_step(
         CFG-weighted velocity (B, C, H, W)
     """
     time_channels = int(getattr(model, "time_channels", 2))
+    if time_channels != 2:
+        raise ValueError("CFG sampling requires model.time_channels == 2")
 
     if t.dim() == 1:
         t = t.unsqueeze(-1)
@@ -47,7 +49,7 @@ def cfg_sample_step(
         r = r.unsqueeze(-1)
 
     # Create unified input
-    time_input = make_time_input(t, r=r, time_channels=time_channels)
+    time_input = make_time_input(t, r=r)
     unified = make_unified_flow_matching_input(x, time_input)
 
     if guidance_scale == 1.0:
@@ -94,8 +96,10 @@ class CFGWrapper(nn.Module):
         from dataloaders.base_dataloaders import make_ununified_flow_matching_input
 
         time_channels = int(getattr(self.model, "time_channels", 2))
+        if time_channels != 2:
+            raise ValueError("CFGWrapper requires model.time_channels == 2")
         ununified = make_ununified_flow_matching_input(
-            unified_input, num_time_channels=time_channels
+            unified_input, num_time_channels=2
         )
         x = ununified.x
         t = ununified.t
@@ -203,9 +207,9 @@ def generate_samples_meanflow_cfg(
 
     # Create time tensor
     time_channels = int(getattr(model, "time_channels", 2))
-    if time_channels < 2:
+    if time_channels != 2:
         raise ValueError(
-            "MeanFlow CFG sampling requires model.time_channels >= 2 to provide (r, t)."
+            "MeanFlow CFG sampling requires model.time_channels == 2 to provide (r, t)."
         )
     r_tensor = torch.full((B, 1), r, device=device, dtype=z.dtype)
     t_tensor = torch.full((B, 1), t, device=device, dtype=z.dtype)

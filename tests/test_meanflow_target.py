@@ -18,8 +18,8 @@ class SimpleModel(nn.Module):
 
     def __init__(self, channels: int = 3, hidden: int = 32, time_channels: int = 2):
         super().__init__()
-        if time_channels < 1:
-            raise ValueError("time_channels must be >= 1")
+        if time_channels != 2:
+            raise ValueError("time_channels must be 2")
         self.time_channels = time_channels
         self.net = nn.Sequential(
             nn.Conv2d(

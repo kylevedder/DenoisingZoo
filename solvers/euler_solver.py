@@ -29,6 +29,8 @@ class EulerSolver(BaseSolver):
     ) -> FlowSolveResult:
         x = initial_state
         time_channels = int(getattr(self._model, "time_channels", 2))
+        if time_channels != 2:
+            raise ValueError("Solver requires model.time_channels == 2")
 
         dt = float(self._t_end - self._t_start) / float(self._num_steps)
         t_schedule = np.linspace(self._t_start, self._t_end, self._num_steps + 1)
@@ -39,7 +41,7 @@ class EulerSolver(BaseSolver):
         for t in t_schedule:
             # Compute velocity v(unified_input)
             t_tensor = torch.full((x.shape[0], 1), t, device=x.device, dtype=x.dtype)
-            time_input = make_time_input(t_tensor, time_channels=time_channels)
+            time_input = make_time_input(t_tensor)
             unified = make_unified_flow_matching_input(x, time_input)
             v = self._model(unified)
 
