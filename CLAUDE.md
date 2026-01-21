@@ -34,6 +34,34 @@ model = Model().to(device)
 data = data.to(device)
 ```
 
+## Mathematical Reasoning and Paper Validation
+
+**Use Codex for math-heavy tasks.** When working on mathematical formulas, loss function derivations, or translating paper equations into code, invoke the Codex subagent (OpenAI Codex 5.2 High Reasoning) for validation:
+
+```bash
+# Invoke Codex to sanity-check mathematical derivations
+codex "Review this MeanFlow loss implementation against Equation 7 from the paper: [paste code]"
+
+# Validate gradient computations
+codex "Verify the JVP computation in this loss function matches the chain rule derivation"
+
+# Cross-check paper-to-code translations
+codex "Does this PyTorch implementation correctly implement the velocity field from Section 3.2?"
+```
+
+**When to use Codex:**
+- Implementing loss functions from paper equations
+- Verifying gradient/JVP/VJP computations
+- Translating mathematical notation (e.g., expectations, integrals) to code
+- Debugging numerical instabilities that may stem from formula errors
+- Sanity-checking normalization constants, scaling factors, and boundary conditions
+
+**Workflow:**
+1. Write initial implementation based on paper
+2. Run `codex` with the relevant paper section and your code
+3. Review Codex's analysis for discrepancies
+4. Fix any identified issues before testing
+
 ## Commands
 
 ### Training
