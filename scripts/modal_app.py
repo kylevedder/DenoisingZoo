@@ -76,6 +76,9 @@ image = (
 # Shared volume for datasets and trackio logs
 training_volume = modal.Volume.from_name("training-data", create_if_missing=True)
 
+# Minimal image for utility functions (no torch, just Python stdlib)
+util_image = modal.Image.debian_slim(python_version="3.12")
+
 
 @app.function(
     image=image,
@@ -171,7 +174,7 @@ def train_on_modal(extra_args: list[str]) -> None:
 
 
 @app.function(
-    image=image,
+    image=util_image,
     volumes={"/data": training_volume},
 )
 def list_trackio_runs() -> list[str]:
@@ -205,7 +208,7 @@ def list_trackio_runs() -> list[str]:
 
 
 @app.function(
-    image=image,
+    image=util_image,
     volumes={"/data": training_volume},
 )
 def get_trackio_db(project: str = "denoising-zoo") -> bytes | None:
