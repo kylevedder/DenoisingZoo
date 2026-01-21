@@ -102,3 +102,27 @@ python visualizers/kmeans_field_vis.py --ckpt outputs/ckpts/mlp/last.pt --out fi
 # Particle transport
 python visualizers/kmeans_particles_vis.py --ckpt outputs/ckpts/mlp/last.pt --out particles.gif --solver rk4
 ```
+
+## Experiment Tracking (Trackio)
+
+Training metrics are logged via [trackio](https://github.com/huggingface/trackio). View the dashboard:
+
+```bash
+trackio show --project denoising-zoo
+```
+
+Metrics logged:
+- `train/loss` - logged every K batches (configurable via `trackio.log_every`)
+- `eval/energy_distance` - logged at end of each epoch
+- GPU metrics (MPS): `gpu/util_pct`, `gpu/power_w`, `gpu/temp_c`, `mps/allocated_mb`
+
+CLI commands:
+```bash
+trackio list runs --project denoising-zoo
+trackio get metric --project denoising-zoo --run <run_name> --metric "train/loss" --json
+```
+
+Disable tracking:
+```bash
+python launcher.py run_name=exp trackio.enabled=false
+```
