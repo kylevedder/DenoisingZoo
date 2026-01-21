@@ -5,6 +5,8 @@ Modal application for remote training on NVIDIA GPUs.
 import os
 import sys
 import subprocess
+import threading
+import time
 from pathlib import Path
 import modal
 
@@ -139,11 +141,33 @@ def train_on_modal(extra_args: list[str]) -> None:
 
     cmd = ["python", "train.py", "device=cuda", *args]
     print("Running command:", " ".join(cmd))
-    subprocess.run(cmd, check=True)
 
-    # Commit volume to persist trackio logs and any checkpoints
+    # Background thread to commit volume periodically (every 5 min)
+    # This allows syncing trackio data locally during long runs
+    stop_commit_thread = threading.Event()
+
+    def periodic_commit():
+        commit_interval = 300  # 5 minutes
+        while not stop_commit_thread.wait(commit_interval):
+            try:
+                training_volume.commit()
+                print("[modal] Periodic volume commit completed")
+            except Exception as e:
+                print(f"[modal] Periodic commit failed: {e}")
+
+    commit_thread = threading.Thread(target=periodic_commit, daemon=True)
+    commit_thread.start()
+    print("[modal] Started periodic volume commit (every 5 min)")
+
+    try:
+        subprocess.run(cmd, check=True)
+    finally:
+        stop_commit_thread.set()
+        commit_thread.join(timeout=5)
+
+    # Final commit to persist trackio logs and any checkpoints
     training_volume.commit()
-    print("[modal] Volume committed - trackio logs persisted")
+    print("[modal] Final volume commit - trackio logs persisted")
 
 
 @app.function(

@@ -170,17 +170,22 @@ modal token new  # one-time auth
 python launcher.py --backend modal run_name=my_experiment dataloaders=celeba model=cnn
 ```
 
-Trackio logs are stored in a Modal volume and must be synced to local after training:
+**Syncing trackio logs during and after training:**
+
+Trackio logs are stored in a Modal volume. The volume is automatically committed every 5 minutes during training, so you can sync progress while a long run is still active:
+
 ```bash
+# In a separate terminal, sync trackio data from Modal to local
+python scripts/modal_app.py sync
+
 # List runs stored in Modal volume
 python scripts/modal_app.py list
 
-# Sync trackio data from Modal to local
-python scripts/modal_app.py sync
-
-# Then view locally
+# View synced data locally
 trackio show --project denoising-zoo
 ```
+
+For long runs, periodically run `sync` to pull the latest metrics. The sync merges Modal data with your local trackio database.
 
 ### Experiment Tracking (Trackio)
 Trackio is enabled by default. Each run is identified by the required `run_name` parameter.
