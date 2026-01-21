@@ -8,11 +8,9 @@ import argparse
 import subprocess
 import shlex
 import sys
-from pathlib import Path
-from typing import List
+from datetime import datetime
 
 import torch
-from datetime import datetime
 
 from helpers import has_mps_backend, is_mps_available
 
@@ -64,7 +62,7 @@ def detect_device() -> str:
     return "cpu"
 
 
-def run_local_training(device: str, extra_args: List[str], run_name: str) -> None:
+def run_local_training(device: str, extra_args: list[str], run_name: str) -> None:
     """Run training locally with the specified device."""
     print(f"Running local training on device: {device}")
 
@@ -87,11 +85,17 @@ def run_local_training(device: str, extra_args: List[str], run_name: str) -> Non
     subprocess.run(cmd, check=True)
 
 
-def run_modal_training(extra_args: List[str], run_name: str) -> None:
-    """Run training on Modal with NVIDIA GPU (streams logs)."""
+def run_modal_training(extra_args: list[str], run_name: str, detach: bool = True) -> None:
+    """Run training on Modal with NVIDIA GPU.
+
+    Args:
+        extra_args: Hydra config overrides to pass to train.py
+        run_name: Name for this training run (used for checkpoints/logging)
+        detach: If True, run detached so job continues if client disconnects
+    """
     print("Running training on Modal with NVIDIA GPU...")
 
-    # Prefer Modal CLI for reliable log streaming
+    # Prefer Modal CLI for reliable execution
     try:
         subprocess.run(["modal", "--version"], capture_output=True, check=True)
     except (subprocess.CalledProcessError, FileNotFoundError):
@@ -106,13 +110,25 @@ def run_modal_training(extra_args: List[str], run_name: str) -> None:
         args_with_run.append(f"+run_name={run_name}")
     cli_args = " ".join(shlex.quote(a) for a in args_with_run)
     activate_script = ".venv/bin/activate"
+
+    # Use --detach for fire-and-forget execution that survives client disconnect
+    detach_flag = "--detach" if detach else ""
     cmd = [
         "bash",
         "-c",
-        f"source {activate_script} && modal run scripts/modal_app.py -- {cli_args}",
+        f"source {activate_script} && modal run {detach_flag} scripts/modal_app.py -- {cli_args}",
     ]
 
+    if detach:
+        print("Job will run detached - you can close this terminal and it will continue.")
+        print(f"Monitor progress: python scripts/modal_app.py sync && trackio show --project denoising-zoo")
+
     subprocess.run(cmd, check=True)
+
+    if detach:
+        print("\nJob submitted successfully!")
+        print("Sync trackio data:  python scripts/modal_app.py sync")
+        print("List checkpoints:   python scripts/modal_app.py ckpts")
 
 
 def main():
@@ -132,6 +148,11 @@ def main():
         help="Device to use for local training (default: auto)",
     )
     parser.add_argument(
+        "--no-detach",
+        action="store_true",
+        help="For Modal backend: stream logs instead of running detached (job dies if you disconnect)",
+    )
+    parser.add_argument(
         "extra_args", nargs="*", help="Extra arguments to pass to train.py"
     )
 
@@ -144,7 +165,7 @@ def main():
     run_name = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     if args.backend == "modal":
-        run_modal_training(args.extra_args, run_name)
+        run_modal_training(args.extra_args, run_name, detach=not args.no_detach)
     else:
         # Local training
         device = args.device

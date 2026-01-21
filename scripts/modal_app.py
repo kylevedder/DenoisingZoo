@@ -5,8 +5,6 @@ Modal application for remote training on NVIDIA GPUs.
 import os
 import sys
 import subprocess
-import threading
-import time
 from pathlib import Path
 import modal
 
@@ -83,8 +81,13 @@ util_image = modal.Image.debian_slim(python_version="3.12")
 @app.function(
     image=image,
     gpu="A100-40GB",
-    timeout=14400,  # 4 hours for longer training runs
+    timeout=43200,  # 12 hours max per attempt
     volumes={"/data": training_volume},
+    retries=modal.Retries(
+        max_retries=5,           # Up to 5 retries (60 hours total worst case)
+        initial_delay=30.0,      # 30 second delay before retry
+        backoff_coefficient=1.0, # Fixed delay (not exponential)
+    ),
 )
 def train_on_modal(extra_args: list[str]) -> None:
     """Run training on Modal with NVIDIA GPU."""
@@ -163,35 +166,21 @@ def train_on_modal(extra_args: list[str]) -> None:
         if not _has_prefix("dataloaders.eval.dataset.root="):
             args.append("dataloaders.eval.dataset.root=/data/celeba")
 
+    # Always enable resume - safe even if no checkpoint exists
+    # This ensures automatic recovery when retries trigger
+    if not any(a.startswith("resume=") for a in args):
+        args.append("resume=true")
+        print("[modal] Auto-enabled resume=true for retry resilience")
+
     cmd = ["python", "train.py", "device=cuda", *args]
     print("Running command:", " ".join(cmd))
 
-    # Background thread to commit volume periodically (every 5 min)
-    # This allows syncing trackio data locally during long runs
-    stop_commit_thread = threading.Event()
+    # Run training - Modal Volumes auto-commit periodically
+    subprocess.run(cmd, check=True)
 
-    def periodic_commit():
-        commit_interval = 300  # 5 minutes
-        while not stop_commit_thread.wait(commit_interval):
-            try:
-                training_volume.commit()
-                print("[modal] Periodic volume commit completed")
-            except Exception as e:
-                print(f"[modal] Periodic commit failed: {e}")
-
-    commit_thread = threading.Thread(target=periodic_commit, daemon=True)
-    commit_thread.start()
-    print("[modal] Started periodic volume commit (every 5 min)")
-
-    try:
-        subprocess.run(cmd, check=True)
-    finally:
-        stop_commit_thread.set()
-        commit_thread.join(timeout=5)
-
-    # Final commit to persist trackio logs and any checkpoints
+    # Final commit for immediate visibility after completion
     training_volume.commit()
-    print("[modal] Final volume commit - trackio logs persisted")
+    print("[modal] Final volume commit - training complete")
 
 
 @app.function(
