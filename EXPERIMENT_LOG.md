@@ -398,9 +398,61 @@ python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow 
 
 ---
 
+### Experiment 4.0d: JVP Performance Investigation
+
+**Status:** COMPLETED
+
+**Goal:** Understand JVP computation costs on A100.
+
+**Findings:**
+
+| Config | Speed (s/batch) | Notes |
+|--------|-----------------|-------|
+| ratio=0.25, no compile | ~0.4s | Fast, practical |
+| ratio=0.75, no compile | ~5.85s | 15x slower than ratio=0.25 |
+| ratio=0.75, compile=true | ~295s | torch.compile breaks with JVP |
+
+**Key Insights:**
+1. **torch.compile + JVP is broken**: ~50x slowdown vs uncompiled
+2. **Higher ratios are expensive**: ratio=0.75 is 15x slower than ratio=0.25 due to more JVP computations
+3. **Memory usage scales with ratio**: ratio=0.75 OOMs with batch_size=128 on A100-40GB
+
+**Practical Recommendations:**
+- Use ratio=0.25 for initial experiments (fast, good results)
+- Disable torch.compile when using MeanFlow loss with ratio>0
+- Use batch_size=64 with gradient_accumulation for ratio=0.75
+
+---
+
+### Experiment 4.0e: CIFAR-10 MeanFlow ratio=0.25 (20 epochs)
+
+**Status:** PARTIAL (14/20 epochs completed before Modal timeout)
+
+**Command:**
+```bash
+python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow epochs=20 \
+  loss.meanflow_ratio=0.25 loss.logit_normal_mean=-2.0 loss.logit_normal_std=2.0 \
+  loss.weighting_power=0.75 dataloaders.train.batch_size=128 optimizer.lr=1e-4 \
+  precision=bf16 eval_every=5 save_every=10 run_name=cifar10_ratio025_20ep
+```
+
+**Partial Results (14 epochs):**
+| Metric | Value |
+|--------|-------|
+| Final Loss | 0.204 |
+| Speed | 2.5-2.6 it/s (A100-40GB) |
+| Per Epoch | ~2.5 minutes |
+
+**Key Observations:**
+- Loss converged quickly: 1.27 → 0.20 in ~14 epochs
+- Training stable and fast with ratio=0.25 + batch_size=128
+- Modal connection dropped after ~35 minutes (14 epochs)
+
+---
+
 ### Experiment 4.1: CIFAR-10 Official Config (Short Run)
 
-**Status:** PROPOSED
+**Status:** ATTEMPTED - JVP too slow for ratio=0.75
 
 **Goal:** Validate CIFAR-10 training with official hyperparameters (shorter run first).
 
