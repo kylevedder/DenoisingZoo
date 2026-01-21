@@ -14,7 +14,7 @@ from dataloaders.base_dataloaders import (
     make_time_input,
     make_unified_flow_matching_input,
 )
-from model_contracts import TimeChannelModule
+from model_contracts import TimeChannelModule, is_time_channel_module
 
 
 class MeanFlowLoss(nn.Module):
@@ -221,7 +221,7 @@ class MeanFlowLoss(nn.Module):
         r_uniform = torch.rand(B, 1, device=x.device, dtype=dtype) * t
         r = torch.where(use_meanflow, r_uniform, t)
 
-        if not isinstance(self._model, TimeChannelModule):
+        if not is_time_channel_module(self._model):
             raise ValueError(
                 "MeanFlowLoss requires model to inherit from TimeChannelModule."
             )

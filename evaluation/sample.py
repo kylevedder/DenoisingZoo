@@ -13,7 +13,7 @@ from dataloaders.base_dataloaders import (
     make_time_input,
     make_unified_flow_matching_input,
 )
-from model_contracts import TimeChannelModule
+from model_contracts import is_time_channel_module
 
 
 def generate_samples(
@@ -118,7 +118,7 @@ def generate_samples_meanflow(
                 generator=rng,
             )
 
-            if not isinstance(model, TimeChannelModule):
+            if not is_time_channel_module(model):
                 raise ValueError("MeanFlow sampling requires TimeChannelModule model.")
 
             # Build time tensor for (r, t)

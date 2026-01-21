@@ -8,6 +8,7 @@ defaults:
 # Device and precision
 device: mps          # choices: cpu, cuda, mps (on Apple)
 precision: fp32       # choices: fp32, bf16, fp16
+compile: false        # torch.compile the model (may speed up training)
 
 # Training
 epochs: 10

@@ -13,3 +13,15 @@ class TimeChannelModule(nn.Module):
         if time_channels != TIME_CHANNELS_REQUIRED:
             raise ValueError(f"time_channels must be {TIME_CHANNELS_REQUIRED}")
         self.time_channels = time_channels
+
+
+def unwrap_compiled(model: nn.Module) -> nn.Module:
+    """Unwrap a torch.compile'd model to get the underlying module."""
+    if hasattr(model, "_orig_mod"):
+        return model._orig_mod
+    return model
+
+
+def is_time_channel_module(model: nn.Module) -> bool:
+    """Check if model is a TimeChannelModule (handles compiled models)."""
+    return isinstance(unwrap_compiled(model), TimeChannelModule)

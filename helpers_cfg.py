@@ -16,7 +16,7 @@ from dataloaders.base_dataloaders import (
     make_unified_flow_matching_input,
 )
 from constants import CFG_NULL_LABEL, TIME_CHANNELS_REQUIRED
-from model_contracts import TimeChannelModule
+from model_contracts import is_time_channel_module
 from solvers.base_solver import BaseSolver
 
 
@@ -42,7 +42,7 @@ def cfg_sample_step(
     Returns:
         CFG-weighted velocity (B, C, H, W)
     """
-    if not isinstance(model, TimeChannelModule):
+    if not is_time_channel_module(model):
         raise ValueError("CFG sampling requires TimeChannelModule model.")
 
     if t.dim() == 1:
@@ -97,7 +97,7 @@ class CFGWrapper(nn.Module):
         """Forward with CFG applied."""
         from dataloaders.base_dataloaders import make_ununified_flow_matching_input
 
-        if not isinstance(self.model, TimeChannelModule):
+        if not is_time_channel_module(self.model):
             raise ValueError("CFGWrapper requires TimeChannelModule model.")
         ununified = make_ununified_flow_matching_input(
             unified_input, num_time_channels=TIME_CHANNELS_REQUIRED
@@ -199,7 +199,7 @@ def generate_samples_meanflow_cfg(
     z = torch.randn((B, *sample_shape), device=device, generator=rng)
 
     # Create time tensor
-    if not isinstance(model, TimeChannelModule):
+    if not is_time_channel_module(model):
         raise ValueError("MeanFlow CFG sampling requires TimeChannelModule model.")
     r_tensor = torch.full((B, 1), r, device=device, dtype=z.dtype)
     t_tensor = torch.full((B, 1), t, device=device, dtype=z.dtype)

@@ -222,8 +222,17 @@ def train(cfg: DictConfig) -> None:
     eval_loader = build_dataloader_from_config(cfg.dataloaders.eval, device)
 
     model = build_model(cfg, device)
+
+    # Optionally compile model for faster training
+    if cfg.get("compile", False):
+        print("Compiling model with torch.compile...")
+        model = torch.compile(model)
+        print("Model compiled")
+
     # Derive architecture-specific checkpoint directory: outputs/ckpts/<arch>
-    arch_name = model.__class__.__name__.lower()
+    # Use unwrap_compiled to get the underlying model class name for compiled models
+    from model_contracts import unwrap_compiled
+    arch_name = unwrap_compiled(model).__class__.__name__.lower()
     base_ckpt_dir = str(cfg.get("ckpt_dir", "outputs/ckpts"))
     cfg.ckpt_dir = f"{base_ckpt_dir}/{arch_name}"
     # keep ckpt_name as-is (defaults to last.pt)
