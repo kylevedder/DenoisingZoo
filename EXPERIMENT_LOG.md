@@ -426,7 +426,7 @@ python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow 
 
 ### Experiment 4.0e: CIFAR-10 MeanFlow ratio=0.25 (20 epochs)
 
-**Status:** PARTIAL (14/20 epochs completed before Modal timeout)
+**Status:** RESTARTED (with hardened Modal infrastructure)
 
 **Command:**
 ```bash
@@ -453,25 +453,36 @@ python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow 
 - Final loss values: 0.205-0.21
 - Energy distance at epoch 5: 0.246 (very good!)
 
+**Restart (2026-01-21):**
+- Restarted with hardened Modal infrastructure (12h timeout, 5 retries, --detach)
+- Job submitted: https://modal.com/apps/kyle-c-vedder/main/ap-iyHojTgq8r6pZY74ZqbVrl
+- Will run to completion with auto-resume on any failures
+
 ---
 
 ### Modal Connection Issues (2026-01-21)
 
-**Status:** Ongoing investigation
+**Status:** RESOLVED
 
 Multiple experiments failed due to Modal client connection drops:
 - `StreamTerminatedError: Connection lost`
 - `GRPCError: App state is APP_STATE_STOPPED`
 - `Function call has expired`
 
-**Workarounds attempted:**
-1. `modal run --detach` - Still fails after ~5 min
-2. Frequent volume commits (every 5 min) - Data preserved but training interrupted
+**Fix Applied (2026-01-21):**
+Hardened Modal infrastructure with:
+1. Increased timeout from 4h to 12h per attempt
+2. Added automatic retries (5 retries with 30s delay between attempts)
+3. Enabled `--detach` flag by default for fire-and-forget execution
+4. Auto-inject `resume=true` for seamless checkpoint recovery on retry
+5. Removed periodic volume commit thread (Modal auto-commits)
 
-**Recommendations:**
-- Use `save_every=5` for frequent checkpointing
-- Sync trackio data often: `python scripts/modal_app.py sync`
-- Consider using resume capability when connections drop
+**Verification Test:**
+- 1-epoch CIFAR-10 with ratio=0.25 completed successfully
+- Loss: 0.246, Energy Distance: 3.38
+- Job ran fully detached and survived client disconnect
+
+See `MODAL_HARDENING_PLAN.md` for full details.
 
 ---
 
