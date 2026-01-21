@@ -12,6 +12,7 @@ precision: fp32       # choices: fp32, bf16, fp16
 # Training
 epochs: 10
 eval_every: 1
+gradient_accumulation_steps: 1  # Accumulate gradients over N batches for larger effective batch size
 
 # Checkpointing
 ckpt_dir: outputs/ckpts
@@ -38,4 +39,5 @@ run_name: ???  # Must be provided via CLI: python launcher.py run_name=my_experi
 trackio:
   enabled: true
   project: denoising-zoo
+  log_every: 10  # log train metrics every N batches
 

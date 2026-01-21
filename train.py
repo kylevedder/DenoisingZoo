@@ -61,11 +61,15 @@ def log_trackio(
     enabled: bool,
     device: torch.device,
     gpu_monitor: GPUMetricsMonitor | None = None,
+    step: int | None = None,
 ) -> None:
     """Log metrics to trackio if enabled.
 
     If a gpu_monitor is provided and running, uses its rolling averages for
     GPU metrics. Otherwise, only logs MPS memory metrics.
+
+    Args:
+        step: Optional explicit step number. If None, trackio auto-increments.
     """
     if enabled:
         if device.type == "mps":
@@ -79,7 +83,7 @@ def log_trackio(
                 metrics["mps/driver_mb"] = (
                     torch.mps.driver_allocated_memory() / 1024**2
                 )
-        trackio.log(metrics)
+        trackio.log(metrics, step=step)
 
 
 def finish_trackio(enabled: bool) -> None:
@@ -126,29 +130,75 @@ def train_one_epoch(
     device: torch.device,
     settings: PrecisionSettings,
     scaler: torch.amp.GradScaler,
-) -> float:
+    gradient_accumulation_steps: int = 1,
+    log_fn: Callable[[dict, int], None] | None = None,
+    log_every: int = 10,
+    global_step: int = 0,
+    epoch: int = 1,
+) -> tuple[float, int]:
+    """Train for one epoch with optional gradient accumulation.
+
+    Args:
+        gradient_accumulation_steps: Number of mini-batches to accumulate
+            before performing an optimizer step. Effective batch size =
+            loader.batch_size * gradient_accumulation_steps.
+        log_fn: Optional callback(metrics, step) to log metrics every log_every batches.
+        log_every: Log train metrics every N batches.
+        global_step: Starting global step counter (incremented each batch).
+        epoch: Current epoch number (for logging).
+
+    Returns:
+        Tuple of (average_loss, updated_global_step).
+    """
     model.train()
     running_loss = 0.0
     num_batches = 0
 
     bar = tqdm.tqdm(loader)
-    for batch in bar:
-        optimizer.zero_grad(set_to_none=True)
+    optimizer.zero_grad(set_to_none=True)
+
+    for step, batch in enumerate(bar):
+        # Scale loss by accumulation steps to normalize gradient magnitude
         loss = compute_loss(model, batch, device, settings, criterion)
+        loss = loss / gradient_accumulation_steps
 
         if settings.use_scaler:
             scaler.scale(loss).backward()
+        else:
+            loss.backward()
+
+        # Track unscaled loss for reporting
+        batch_loss = loss.detach().item() * gradient_accumulation_steps
+        running_loss += batch_loss
+        num_batches += 1
+        global_step += 1
+
+        # Optimizer step after accumulating gradients
+        if (step + 1) % gradient_accumulation_steps == 0:
+            if settings.use_scaler:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+
+        avg_loss = running_loss / max(1, num_batches)
+        bar.set_description(f"loss: {avg_loss:.6f}")
+
+        # Log train metrics every K batches
+        if log_fn is not None and global_step % log_every == 0:
+            log_fn({"epoch": epoch, "batch": step + 1, "train/loss": avg_loss}, global_step)
+
+    # Handle remaining gradients if dataset size not divisible by accum steps
+    if (step + 1) % gradient_accumulation_steps != 0:
+        if settings.use_scaler:
             scaler.step(optimizer)
             scaler.update()
         else:
-            loss.backward()
             optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
 
-        running_loss += loss.detach().item()
-        num_batches += 1
-        bar.set_description(f"loss: {running_loss / max(1, num_batches):.6f}")
-
-    return running_loss / max(1, num_batches)
+    return running_loss / max(1, num_batches), global_step
 
 
 def train(cfg: DictConfig) -> None:
@@ -230,9 +280,23 @@ def train(cfg: DictConfig) -> None:
 
     epochs: int = int(cfg.get("epochs", 1))
     eval_every: int = int(cfg.get("eval_every", 1))  # how often to run eval (in epochs)
+    gradient_accumulation_steps: int = int(cfg.get("gradient_accumulation_steps", 1))
+    if gradient_accumulation_steps > 1:
+        effective_batch = train_loader.batch_size * gradient_accumulation_steps
+        print(f"Gradient accumulation: {gradient_accumulation_steps} steps, effective batch size: {effective_batch}")
+
+    # Trackio logging config
+    trackio_cfg = cfg.get("trackio", {})
+    log_every: int = int(trackio_cfg.get("log_every", 10))
+
+    # Create logging callback for per-batch logging
+    def log_fn(metrics: dict, step: int) -> None:
+        log_trackio(metrics, trackio_enabled, device, gpu_monitor, step=step)
+
     train_start_time = time.time()
+    global_step = 0
     for epoch in range(start_epoch, epochs + 1):
-        avg_loss = train_one_epoch(
+        avg_loss, global_step = train_one_epoch(
             model=model,
             loader=train_loader,
             optimizer=optimizer,
@@ -240,16 +304,13 @@ def train(cfg: DictConfig) -> None:
             device=device,
             settings=settings,
             scaler=scaler,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            log_fn=log_fn if trackio_enabled else None,
+            log_every=log_every,
+            global_step=global_step,
+            epoch=epoch,
         )
         print(f"epoch {epoch:04d} | loss {avg_loss:.6f}")
-
-        # Prepare metrics for logging
-        elapsed_seconds = time.time() - train_start_time
-        metrics = {
-            "epoch": epoch,
-            "train/loss": avg_loss,
-            "train/elapsed_seconds": elapsed_seconds,
-        }
 
         # Eval (distributional) based on eval_every policy
         if eval_every > 0 and (epoch % eval_every == 0 or epoch == epochs):
@@ -257,10 +318,15 @@ def train(cfg: DictConfig) -> None:
                 model=model, eval_loader=eval_loader, device=device, solver=solver
             )
             print(f"eval energy_distance {ed:.6f}")
-            metrics["eval/energy_distance"] = ed
-
-        # Log metrics to trackio
-        log_trackio(metrics, trackio_enabled, device, gpu_monitor)
+            # Log eval metrics separately (only at end of epoch)
+            elapsed_seconds = time.time() - train_start_time
+            log_trackio(
+                {"epoch": epoch, "eval/energy_distance": ed, "train/elapsed_seconds": elapsed_seconds},
+                trackio_enabled,
+                device,
+                gpu_monitor,
+                step=global_step,
+            )
 
         # Save checkpoint based on policy
         save_if_needed(
