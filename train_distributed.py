@@ -8,14 +8,15 @@ from __future__ import annotations
 
 import contextlib
 import time
+from pathlib import Path
 from typing import Callable
 
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
 import torch
+import torch.distributed as dist
 from torch.utils.data import DataLoader
-from torch.utils.data.distributed import DistributedSampler
 import tqdm
 
 import trackio
@@ -42,11 +43,11 @@ from helpers import (
     load_checkpoint_distributed,
     reduce_sum,
     evaluate_epoch_energy_distance,
-    evaluate_epoch_energy_distance_distributed,
 )
 from losses.meanflow_loss import MeanFlowLoss
 from hydra.utils import instantiate
 from gpu_monitor import GPUMetricsMonitor
+from model_contracts import unwrap_compiled
 
 
 Batch = dict[str, torch.Tensor]
@@ -271,19 +272,19 @@ def train(cfg: DictConfig) -> None:
         if "MeanFlowLoss" in loss_target:
             raise ValueError("FSDP is not compatible with MeanFlow loss (JVP). Use DDP instead.")
 
-    # Build dataloaders with DistributedSampler
+    # Build dataloaders: train uses DistributedSampler, eval runs on rank 0 only
     train_loader, train_sampler = build_dataloader_from_config_distributed(
         cfg.dataloaders.train, device, distributed, is_train=True, worker_init_fn=worker_init_fn
     )
+    # Eval loader: no distributed sampler (rank 0 processes full dataset for accurate metrics)
     eval_loader, _ = build_dataloader_from_config_distributed(
-        cfg.dataloaders.eval, device, distributed, is_train=False, worker_init_fn=worker_init_fn
+        cfg.dataloaders.eval, device, distributed=False, is_train=False, worker_init_fn=worker_init_fn
     )
 
     # Build model with DDP wrapping
     model = build_model_distributed(cfg, device, local_rank if distributed else None, strategy)
 
     # Get architecture name for checkpoint path (unwrap if needed)
-    from model_contracts import unwrap_compiled
     arch_name = unwrap_compiled(unwrap_model(model)).__class__.__name__.lower()
     base_ckpt_dir = str(cfg.get("ckpt_dir", "outputs/ckpts"))
     cfg.ckpt_dir = f"{base_ckpt_dir}/{arch_name}"
@@ -367,27 +368,22 @@ def train(cfg: DictConfig) -> None:
         if is_main_process():
             print(f"epoch {epoch:04d} | loss {avg_loss:.6f}")
 
-        # Evaluation
+        # Evaluation (rank 0 only to avoid sharding bias)
         if eval_every > 0 and (epoch % eval_every == 0 or epoch == epochs):
-            # Set model to eval mode
-            model.eval()
-            # Use distributed eval to gather samples from all ranks
-            if distributed:
-                ed = evaluate_epoch_energy_distance_distributed(
-                    model=model, eval_loader=eval_loader, device=device, solver=solver
-                )
-            else:
+            if is_main_process():
+                model.eval()
                 ed = evaluate_epoch_energy_distance(
                     model=model, eval_loader=eval_loader, device=device, solver=solver
                 )
-            # ed is None on non-rank-0 processes in distributed mode
-            if is_main_process() and ed is not None:
                 print(f"eval energy_distance {ed:.6f}")
                 elapsed_seconds = time.time() - train_start_time
                 log_trackio(
                     {"epoch": epoch, "eval/energy_distance": ed, "train/elapsed_seconds": elapsed_seconds},
                     trackio_enabled, device, gpu_monitor, step=global_step
                 )
+            # Synchronize all ranks before continuing
+            if distributed:
+                dist.barrier()
 
         # Save checkpoint (rank 0 only)
         save_every = int(cfg.get("save_every", 1))
@@ -396,7 +392,6 @@ def train(cfg: DictConfig) -> None:
             if is_main_process():
                 print(f"Saved checkpoint to {ckpt_path}")
                 # Archive
-                from pathlib import Path
                 run_name = str(cfg.get("run_name", "run"))
                 archive_dir = Path(ckpt_path).parent / "archive"
                 archive_dir.mkdir(parents=True, exist_ok=True)

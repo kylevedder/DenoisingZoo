@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import os
+import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
-from tqdm import tqdm
 
+import numpy as np
 import torch
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
+from tqdm import tqdm
 
 from omegaconf import DictConfig, OmegaConf
 from hydra.utils import instantiate
@@ -415,13 +421,6 @@ def evaluate_epoch_energy_distance(
 # Distributed training utilities
 # -----------------------------------------------------------------------------
 
-import os
-import random
-import numpy as np
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data.distributed import DistributedSampler
-
 
 def setup_distributed(cfg: DictConfig) -> tuple[int, int, int]:
     """Initialize distributed training.
@@ -742,62 +741,3 @@ def all_gather_variable_size(tensor: torch.Tensor) -> torch.Tensor:
         result.append(gathered[i][:size.item()])
 
     return torch.cat(result, dim=0)
-
-
-def evaluate_epoch_energy_distance_distributed(
-    model: torch.nn.Module,
-    eval_loader: DataLoader,
-    device: torch.device,
-    solver: Any,
-    p: float = 2.0,
-) -> float | None:
-    """Distributed version of evaluate_epoch_energy_distance.
-
-    Gathers predictions and targets from all ranks before computing
-    the energy distance, ensuring accurate global metrics.
-
-    Returns the energy distance on rank 0, None on other ranks.
-    """
-    model.eval()
-    all_y_pred = []
-    all_y_true = []
-
-    with torch.no_grad():
-        for batch in tqdm(eval_loader, desc="Evaluating energy distance", disable=not is_main_process()):
-            x_t: torch.Tensor = batch["input"].to(device)
-            t: torch.Tensor = batch["t"].to(device)
-            v: torch.Tensor = batch["target"].to(device)
-
-            t_b = broadcast_batch_scalar_to(t, x_t)
-
-            x0 = x_t - t_b * v
-            y_true = x0 + v
-
-            result = solver.solve(x0)
-            y_pred = result.final_state
-
-            # Flatten to (N, D) for distance computation
-            y_pred_2d = reshape_to_samples_2d(y_pred)
-            y_true_2d = reshape_to_samples_2d(y_true)
-
-            all_y_pred.append(y_pred_2d)
-            all_y_true.append(y_true_2d)
-
-    # Concatenate local batches
-    local_y_pred = torch.cat(all_y_pred, dim=0)
-    local_y_true = torch.cat(all_y_true, dim=0)
-
-    # Gather from all ranks
-    if dist.is_initialized():
-        global_y_pred = all_gather_variable_size(local_y_pred)
-        global_y_true = all_gather_variable_size(local_y_true)
-    else:
-        global_y_pred = local_y_pred
-        global_y_true = local_y_true
-
-    # Only rank 0 computes and returns the metric
-    if is_main_process():
-        ed2 = compute_energy_distance_u_statistic(global_y_pred, global_y_true, p=p)
-        return ed2
-
-    return None
