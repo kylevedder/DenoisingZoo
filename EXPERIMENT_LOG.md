@@ -222,7 +222,9 @@ python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow 
   precision=bf16 eval_every=5 save_every=5 run_name=cifar10_ratio0_20ep
 ```
 
-Job: https://modal.com/apps/kyle-c-vedder/main/ap-jDRZqSmlxaTiHZXw8uWHeZ
+Job: https://modal.com/apps/kyle-c-vedder/main/ap-7V7GBTLLlGH7U74KDcy0CQ
+
+**Note:** Must use `resume=false` to start fresh (otherwise resumes from ratio=0.25 checkpoint).
 
 ### 4.2: CIFAR-10 MeanFlow ratio=0.25 (20 epochs)
 
