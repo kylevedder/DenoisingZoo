@@ -2,6 +2,19 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## CRITICAL: Experiment Monitoring Behavior
+
+**NEVER stop monitoring and running experiments until the user explicitly tells you to stop.**
+
+When running experiments on Modal or any remote compute:
+1. **Continuously poll for status** - Check `modal app list`, sync trackio data, check checkpoints
+2. **Update EXPERIMENT_LOG.md** with results as they come in
+3. **Start the next experiment** immediately when one completes
+4. **Report issues promptly** - If a job fails, investigate and restart
+5. **Do not wait for user prompts** - Proactively monitor and manage the experiment queue
+
+This is research work - experiments take time and need active management. Stopping prematurely wastes GPU hours and delays results.
+
 ## Project Overview
 
 DenoisingZoo is a research codebase for Flow Matching—a generative modeling technique where neural networks learn velocity fields to transform between distributions via ODE integration. Includes MeanFlow implementation for single-step generation.
