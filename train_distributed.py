@@ -42,6 +42,7 @@ from helpers import (
     load_checkpoint_distributed,
     reduce_sum,
     evaluate_epoch_energy_distance,
+    evaluate_epoch_energy_distance_distributed,
 )
 from losses.meanflow_loss import MeanFlowLoss
 from hydra.utils import instantiate
@@ -370,10 +371,17 @@ def train(cfg: DictConfig) -> None:
         if eval_every > 0 and (epoch % eval_every == 0 or epoch == epochs):
             # Set model to eval mode
             model.eval()
-            ed = evaluate_epoch_energy_distance(
-                model=model, eval_loader=eval_loader, device=device, solver=solver
-            )
-            if is_main_process():
+            # Use distributed eval to gather samples from all ranks
+            if distributed:
+                ed = evaluate_epoch_energy_distance_distributed(
+                    model=model, eval_loader=eval_loader, device=device, solver=solver
+                )
+            else:
+                ed = evaluate_epoch_energy_distance(
+                    model=model, eval_loader=eval_loader, device=device, solver=solver
+                )
+            # ed is None on non-rank-0 processes in distributed mode
+            if is_main_process() and ed is not None:
                 print(f"eval energy_distance {ed:.6f}")
                 elapsed_seconds = time.time() - train_start_time
                 log_trackio(
