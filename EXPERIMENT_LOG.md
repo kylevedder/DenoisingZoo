@@ -213,18 +213,25 @@ Quick tests to establish baselines and validate Modal training:
 
 ### 4.1: CIFAR-10 Standard FM Baseline (ratio=0, 20 epochs)
 
-**Status:** IN PROGRESS
+**Status:** COMPLETED
 
 ```bash
 python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow epochs=20 \
   loss.meanflow_ratio=0 loss.logit_normal_mean=-2.0 loss.logit_normal_std=2.0 \
   loss.weighting_power=0.75 dataloaders.train.batch_size=128 optimizer.lr=1e-4 \
-  precision=bf16 eval_every=5 save_every=5 run_name=cifar10_ratio0_20ep
+  precision=bf16 eval_every=5 save_every=5 run_name=cifar10_ratio0_20ep resume=false
 ```
 
-Job: https://modal.com/apps/kyle-c-vedder/main/ap-7V7GBTLLlGH7U74KDcy0CQ
+| Metric | Value |
+|--------|-------|
+| Final Loss | 0.199 |
+| Best Energy Distance | 0.239 (epoch 15) |
+| Final Energy Distance | 0.376 (epoch 20) |
+| Speed | ~1.6 min/epoch |
 
-**Note:** Must use `resume=false` to start fresh (otherwise resumes from ratio=0.25 checkpoint).
+**Checkpoints:** `cifar10_ratio0_20ep_epoch_{0005,0010,0015,0020}.pt`
+
+**Note:** Must use `resume=false` for new runs to avoid loading previous experiment's checkpoint.
 
 ### 4.2: CIFAR-10 MeanFlow ratio=0.25 (20 epochs)
 
