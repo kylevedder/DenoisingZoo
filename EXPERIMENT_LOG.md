@@ -253,9 +253,24 @@ python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow 
 
 **Checkpoints:** `cifar10_ratio025_20ep_epoch_{0005,0010,0015,0020}.pt`
 
+### 4.2b: CIFAR-10 MeanFlow ratio=0.5 (20 epochs)
+
+**Status:** IN PROGRESS
+
+```bash
+python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow epochs=20 \
+  loss.meanflow_ratio=0.5 loss.logit_normal_mean=-2.0 loss.logit_normal_std=2.0 \
+  loss.weighting_power=0.75 dataloaders.train.batch_size=128 optimizer.lr=1e-4 \
+  precision=bf16 eval_every=5 save_every=5 run_name=cifar10_ratio05_20ep resume=false
+```
+
+Job: https://modal.com/apps/kyle-c-vedder/main/ap-AAJKI9OKkrt0TpS0AP5urU
+
+---
+
 ### 4.3: CIFAR-10 Official Config (ratio=0.75)
 
-**Status:** PROPOSED
+**Status:** BLOCKED - JVP too slow
 
 ratio=0.75 is 15x slower than ratio=0.25 due to JVP computation. Need to investigate JVP optimization before attempting full paper replication.
 
