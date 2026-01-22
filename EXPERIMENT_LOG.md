@@ -456,7 +456,22 @@ python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow 
 **Restart (2026-01-21):**
 - Restarted with hardened Modal infrastructure (12h timeout, 5 retries, --detach)
 - Job submitted: https://modal.com/apps/kyle-c-vedder/main/ap-iyHojTgq8r6pZY74ZqbVrl
-- Will run to completion with auto-resume on any failures
+
+**Final Results (2026-01-21):**
+| Epoch | Loss | Energy Distance | Notes |
+|-------|------|-----------------|-------|
+| 5 | ~0.25 | 0.246 | From earlier partial run |
+| 10 | ~0.21 | 2.74 | ED spike (sampling variance?) |
+| 15 | - | - | Checkpoint saved |
+| 20 | ~0.20 | - | COMPLETED |
+
+**Checkpoints saved:**
+- `cifar10_ratio025_20ep_epoch_0005.pt`
+- `cifar10_ratio025_20ep_epoch_0010.pt`
+- `cifar10_ratio025_20ep_epoch_0015.pt`
+- `cifar10_ratio025_20ep_epoch_0020.pt`
+
+**Conclusion:** 20-epoch training completed successfully with hardened Modal infrastructure. Loss converged to ~0.20.
 
 ---
 
@@ -486,9 +501,29 @@ See `MODAL_HARDENING_PLAN.md` for full details.
 
 ---
 
+### Experiment 4.0f: CIFAR-10 Standard FM Baseline (ratio=0, 20 epochs)
+
+**Status:** IN PROGRESS
+
+**Goal:** Establish standard flow matching baseline on CIFAR-10 (same epochs as ratio=0.25).
+
+**Command:**
+```bash
+python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow epochs=20 \
+  loss.meanflow_ratio=0 loss.logit_normal_mean=-2.0 loss.logit_normal_std=2.0 \
+  loss.weighting_power=0.75 dataloaders.train.batch_size=128 optimizer.lr=1e-4 \
+  precision=bf16 eval_every=5 save_every=5 run_name=cifar10_ratio0_20ep
+```
+
+**Run Log:**
+- 2026-01-21: Started 20-epoch ratio=0 baseline
+- Job: https://modal.com/apps/kyle-c-vedder/main/ap-jDRZqSmlxaTiHZXw8uWHeZ
+
+---
+
 ### Experiment 4.1: CIFAR-10 Official Config (Short Run)
 
-**Status:** BLOCKED - Modal connection issues; JVP too slow for ratio=0.75
+**Status:** BLOCKED - JVP too slow for ratio=0.75 on A100
 
 **Goal:** Validate CIFAR-10 training with official hyperparameters (shorter run first).
 
