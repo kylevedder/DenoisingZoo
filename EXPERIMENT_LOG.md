@@ -322,18 +322,39 @@ python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow 
 
 ### 4.3: CIFAR-10 MeanFlow ratio=0.75 (20 epochs)
 
-**Status:** IN PROGRESS
+**Status:** IN PROGRESS (v3)
 
-Paper config uses ratio=0.75 with batch_size=1024. On A100-40GB, ratio=0.75 with batch_size=128 OOMs, so using batch_size=64 with gradient accumulation (2 steps) for effective batch=128.
+Paper config uses ratio=0.75 with batch_size=1024. On A100-40GB:
+- batch_size=128 OOMs immediately
+- batch_size=64 with ratio=0.75 also OOMs (silent failure - job appeared running but no progress for 1+ hour)
+- **Working config:** batch_size=32 with gradient_accumulation_steps=4 (effective batch=128)
 
+**v1 (FAILED - silent OOM):**
+```bash
+# batch_size=64 - hung for 1+ hour with no checkpoints or trackio logs
+python launcher.py --backend modal ... dataloaders.train.batch_size=64 gradient_accumulation_steps=2
+```
+
+**v2 (FAILED - silent failure):**
+```bash
+# Job appeared running but never produced trackio run or checkpoints
+python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow epochs=20 \
+  loss.meanflow_ratio=0.75 loss.logit_normal_mean=-2.0 loss.logit_normal_std=2.0 \
+  loss.weighting_power=0.75 dataloaders.train.batch_size=32 gradient_accumulation_steps=4 \
+  optimizer.lr=1e-4 precision=bf16 eval_every=5 save_every=5 run_name=cifar10_ratio075_20ep_v2 resume=false
+```
+
+**v3 (current):**
 ```bash
 python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow epochs=20 \
   loss.meanflow_ratio=0.75 loss.logit_normal_mean=-2.0 loss.logit_normal_std=2.0 \
-  loss.weighting_power=0.75 dataloaders.train.batch_size=64 gradient_accumulation_steps=2 \
-  optimizer.lr=1e-4 precision=bf16 eval_every=5 save_every=5 run_name=cifar10_ratio075_20ep resume=false
+  loss.weighting_power=0.75 dataloaders.train.batch_size=32 gradient_accumulation_steps=4 \
+  optimizer.lr=1e-4 precision=bf16 eval_every=5 save_every=5 run_name=cifar10_ratio075_20ep_v3 resume=false
 ```
 
-Job: https://modal.com/apps/kyle-c-vedder/main/ap-franynSsOqrKhHk7bHoiHA
+Job: https://modal.com/apps/kyle-c-vedder/main/ap-tWmT9AeDNvuh2rCwvyD1Ic
+Started: 2026-01-22 ~18:36 UTC
+Speed: ~2.8 it/s (batch_size=32 with grad_accum=4)
 
 ---
 
@@ -365,6 +386,47 @@ Job: https://modal.com/apps/kyle-c-vedder/main/ap-franynSsOqrKhHk7bHoiHA
 | 2026-01-20 | Removed temporary MeanFlow debug flags after investigation |
 | 2026-01-20 | Enforced two time channels everywhere (removed 1-channel plumbing) |
 | 2026-01-21 | Hardened Modal infrastructure (12h timeout, 5 retries, auto-resume) |
+| 2026-01-22 | Discovered batch_size=64 with ratio=0.75 OOMs silently; need batch_size=32 |
+
+---
+
+## Modal Job Monitoring Checklist
+
+**Run this checklist every 5-10 minutes while experiments are running:**
+
+1. **Check app status:**
+   ```bash
+   modal app list | head -10
+   ```
+   - `ephemeral (detached)` with tasks > 0 = running
+   - `stopped` = completed or failed
+
+2. **Verify training started (within first 5 min):**
+   ```bash
+   python scripts/modal_app.py sync
+   trackio list runs --project denoising-zoo | grep <run_name>
+   ```
+   - If run doesn't appear after 5 min → likely OOM or crash
+
+3. **Check checkpoint progress:**
+   ```bash
+   python scripts/modal_app.py ckpts | grep <run_name>
+   ```
+   - First checkpoint (epoch 5) should appear within expected time
+   - No checkpoints after 2x expected time → likely hung/OOMed
+
+4. **Expected timing by ratio (CIFAR-10, A100-40GB):**
+   | Ratio | Batch Size | Time/Epoch | First Checkpoint (ep5) |
+   |-------|------------|------------|------------------------|
+   | 0.0 | 128 | ~1.6 min | ~8 min |
+   | 0.25 | 128 | ~2.5 min | ~12 min |
+   | 0.5 | 128 | ~4 min | ~20 min |
+   | 0.75 | 32 | TBD | TBD |
+
+5. **Red flags (take action):**
+   - App shows "ephemeral" but no trackio run after 5 min → Stop and check OOM
+   - No checkpoints after 2x expected time → Stop and investigate
+   - GPU util at 0% for extended period → Job is stuck
 
 ---
 
