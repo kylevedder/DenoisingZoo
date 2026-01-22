@@ -16,6 +16,7 @@ from omegaconf import DictConfig, OmegaConf
 
 import torch
 import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 import tqdm
 
@@ -170,8 +171,8 @@ def train_one_epoch_distributed(
         is_last_step = (step + 1) == total_steps
         is_sync_step = ((step + 1) % gradient_accumulation_steps == 0) or is_last_step
 
-        # Use no_sync() to skip gradient sync for non-sync steps
-        if distributed and hasattr(model, "no_sync"):
+        # Use no_sync() to skip gradient sync for non-sync steps (DDP only)
+        if distributed and isinstance(model, DDP):
             ctx = model.no_sync() if not is_sync_step else contextlib.nullcontext()
         else:
             ctx = contextlib.nullcontext()
@@ -200,8 +201,8 @@ def train_one_epoch_distributed(
                 optimizer.step()
             optimizer.zero_grad(set_to_none=True)
 
-        # Update progress bar on rank 0
-        if is_main_process() and hasattr(bar, "set_description"):
+        # Update progress bar on rank 0 (bar is tqdm when is_main_process)
+        if is_main_process():
             avg_loss = running_loss / max(1, total_samples)
             bar.set_description(f"Epoch {epoch} | loss: {avg_loss:.6f}")
 
