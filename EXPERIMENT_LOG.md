@@ -359,10 +359,12 @@ Speed: ~2.8 it/s (batch_size=32 with grad_accum=4)
 **Results (in progress):**
 | Metric | Epoch 5 | Epoch 10 | Epoch 15 | Epoch 20 |
 |--------|---------|----------|----------|----------|
-| Loss | 0.218 | - | - | - |
-| Energy Distance | 3.82 | - | - | - |
+| Loss | 0.218 | 0.211 | - | - |
+| Energy Distance | 3.82 | 4.49 | - | - |
 
-**Checkpoints:** `cifar10_ratio075_20ep_v3_epoch_{0005}.pt`
+**Note:** ED variance is high, similar to ratio=0.5 experiment.
+
+**Checkpoints:** `cifar10_ratio075_20ep_v3_epoch_{0005,0010}.pt`
 
 ---
 
