@@ -409,3 +409,336 @@ def evaluate_epoch_energy_distance(
             ed_sum += ed2
             num += 1
         return ed_sum / max(1, num)
+
+
+# -----------------------------------------------------------------------------
+# Distributed training utilities
+# -----------------------------------------------------------------------------
+
+import os
+import random
+import numpy as np
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+
+
+def setup_distributed(cfg: DictConfig) -> tuple[int, int, int]:
+    """Initialize distributed training.
+
+    Args:
+        cfg: Hydra config with distributed.enabled flag
+
+    Returns:
+        (local_rank, global_rank, world_size)
+    """
+    # Guard against double initialization
+    if dist.is_initialized():
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        return local_rank, dist.get_rank(), dist.get_world_size()
+
+    distributed_enabled = cfg.get("distributed", {}).get("enabled", False)
+
+    if not dist.is_available():
+        if distributed_enabled:
+            print("WARNING: distributed.enabled=true but torch.distributed is not available")
+        return 0, 0, 1
+
+    # Check if launched via torchrun
+    if "LOCAL_RANK" not in os.environ:
+        if distributed_enabled:
+            print("WARNING: distributed.enabled=true but not launched via torchrun. "
+                  "Running single-process. Use: torchrun --nproc_per_node=N train_distributed.py")
+        return 0, 0, 1
+
+    # Safety check: error if torchrun was used but distributed.enabled=false
+    if not distributed_enabled:
+        raise RuntimeError(
+            "Launched via torchrun but distributed.enabled=false. "
+            "Set distributed.enabled=true or run without torchrun."
+        )
+
+    local_rank = int(os.environ["LOCAL_RANK"])
+    global_rank = int(os.environ.get("RANK", local_rank))
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+
+    # Set device before init (only for CUDA)
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+
+    # Select backend based on availability
+    # NCCL for CUDA, Gloo for CPU/MPS
+    if torch.cuda.is_available():
+        backend = "nccl"
+    else:
+        backend = "gloo"
+
+    dist.init_process_group(
+        backend=backend,
+        init_method="env://",
+    )
+
+    return local_rank, global_rank, world_size
+
+
+def cleanup_distributed() -> None:
+    """Clean up distributed training."""
+    if dist.is_initialized():
+        dist.destroy_process_group()
+
+
+def is_main_process() -> bool:
+    """Check if this is the main process (rank 0)."""
+    if not dist.is_available() or not dist.is_initialized():
+        return True
+    return dist.get_rank() == 0
+
+
+def get_world_size() -> int:
+    """Get the number of processes in the distributed group."""
+    if not dist.is_available() or not dist.is_initialized():
+        return 1
+    return dist.get_world_size()
+
+
+def seed_everything(seed: int, rank: int = 0) -> Callable[[int], None]:
+    """Seed RNG with rank offset for distributed training.
+
+    Args:
+        seed: Base seed from config
+        rank: Global rank (0 for single-GPU)
+
+    Returns:
+        worker_init_fn for DataLoader workers
+    """
+    effective_seed = seed + rank
+    random.seed(effective_seed)
+    np.random.seed(effective_seed)
+    torch.manual_seed(effective_seed)
+    torch.cuda.manual_seed_all(effective_seed)
+
+    def worker_init_fn(worker_id: int) -> None:
+        worker_seed = effective_seed + worker_id
+        np.random.seed(worker_seed)
+        random.seed(worker_seed)
+
+    return worker_init_fn
+
+
+def unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
+    """Recursively unwrap DDP/FSDP/compiled model to get base module."""
+    unwrapped = model
+    while True:
+        if hasattr(unwrapped, "module"):  # DDP, FSDP
+            unwrapped = unwrapped.module
+        elif hasattr(unwrapped, "_orig_mod"):  # torch.compile
+            unwrapped = unwrapped._orig_mod
+        else:
+            break
+    return unwrapped
+
+
+def build_dataloader_from_config_distributed(
+    node: DictConfig,
+    device: torch.device,
+    distributed: bool = False,
+    is_train: bool = True,
+    worker_init_fn: Callable[[int], None] | None = None,
+) -> tuple[DataLoader, DistributedSampler | None]:
+    """Build a DataLoader with optional DistributedSampler support.
+
+    Args:
+        node: Config node with dataset and loader settings
+        device: Target device
+        distributed: Whether to use DistributedSampler
+        is_train: True for training loader (affects drop_last, shuffle)
+        worker_init_fn: Optional worker init function for seeding
+
+    Returns:
+        (DataLoader, sampler or None)
+    """
+    dataset: BaseDataset = instantiate(node.dataset)
+    adapter = DictDatasetAdapter(dataset)
+
+    sampler = None
+    shuffle = node.get("shuffle", True) if is_train else False
+
+    if distributed:
+        sampler = DistributedSampler(
+            adapter,
+            shuffle=shuffle,
+            drop_last=True if is_train else False,
+        )
+        shuffle = False  # Sampler handles shuffling
+
+    loader = DataLoader(
+        adapter,
+        batch_size=node.get("batch_size", 256),
+        shuffle=shuffle,
+        num_workers=node.get("num_workers", 0),
+        pin_memory=node.get("pin_memory", device.type == "cuda"),
+        drop_last=True if (distributed and is_train) else node.get("drop_last", False),
+        sampler=sampler,
+        worker_init_fn=worker_init_fn,
+    )
+
+    return loader, sampler
+
+
+def build_model_distributed(
+    cfg: DictConfig,
+    device: torch.device,
+    local_rank: int | None = None,
+    distributed_strategy: str | None = None,
+) -> torch.nn.Module:
+    """Build model with optional DDP wrapping.
+
+    Args:
+        cfg: Config with model and compile settings
+        device: Target device
+        local_rank: Local GPU rank (required for distributed)
+        distributed_strategy: "ddp" or "fsdp" or None
+
+    Returns:
+        Model (possibly DDP-wrapped)
+    """
+    model: torch.nn.Module = instantiate(cfg.model)
+    model.to(device)
+
+    compile_before = cfg.get("compile", False) and not cfg.get("distributed", {}).get("compile_after_ddp", False)
+    compile_after = cfg.get("compile", False) and cfg.get("distributed", {}).get("compile_after_ddp", False)
+
+    # Optional torch.compile BEFORE DDP (default)
+    if compile_before:
+        compile_mode = cfg.get("compile_mode", "default")
+        model = torch.compile(model, mode=compile_mode)
+
+    # Wrap with DDP
+    if distributed_strategy == "ddp" and local_rank is not None:
+        model = DDP(
+            model,
+            device_ids=[local_rank],
+            output_device=local_rank,
+            find_unused_parameters=cfg.get("distributed", {}).get("find_unused_parameters", False),
+            static_graph=False,
+        )
+    elif distributed_strategy == "fsdp" and local_rank is not None:
+        from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+        from torch.distributed.fsdp import ShardingStrategy
+
+        strategy_map = {
+            "full": ShardingStrategy.FULL_SHARD,
+            "grad_op": ShardingStrategy.SHARD_GRAD_OP,
+            "no": ShardingStrategy.NO_SHARD,
+        }
+        sharding = strategy_map.get(cfg.get("distributed", {}).get("fsdp_sharding", "full"))
+        model = FSDP(model, sharding_strategy=sharding, device_id=local_rank)
+
+    # Optional torch.compile AFTER DDP (experimental)
+    if compile_after:
+        compile_mode = cfg.get("compile_mode", "default")
+        model = torch.compile(model, mode=compile_mode)
+
+    return model
+
+
+def save_checkpoint_distributed(
+    path: str | Path,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scaler: torch.amp.GradScaler | None,
+    epoch: int,
+    cfg: DictConfig,
+) -> None:
+    """Save checkpoint (rank-0 only in distributed mode)."""
+    if not is_main_process():
+        return  # Only rank 0 saves
+
+    path_obj = Path(path)
+    path_obj.parent.mkdir(parents=True, exist_ok=True)
+    state: dict[str, Any] = {
+        "epoch": int(epoch),
+        "model": unwrap_model(model).state_dict(),  # No .module. prefix
+        "optimizer": optimizer.state_dict(),
+        "scaler": scaler.state_dict() if scaler is not None else None,
+        "config": OmegaConf.to_container(cfg, resolve=True),
+        "torch_version": torch.__version__,
+    }
+    torch.save(state, path_obj)
+
+
+def load_checkpoint_distributed(
+    path: str | Path,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer | None = None,
+    scaler: torch.amp.GradScaler | None = None,
+    map_location: torch.device | str | None = None,
+) -> int:
+    """Load checkpoint into (possibly wrapped) model."""
+    checkpoint = torch.load(path, map_location=map_location, weights_only=False)
+
+    # Load into unwrapped model
+    unwrap_model(model).load_state_dict(checkpoint["model"])
+
+    if (
+        optimizer is not None
+        and "optimizer" in checkpoint
+        and checkpoint["optimizer"] is not None
+    ):
+        optimizer.load_state_dict(checkpoint["optimizer"])
+
+    if (
+        scaler is not None
+        and "scaler" in checkpoint
+        and checkpoint["scaler"] is not None
+    ):
+        scaler.load_state_dict(checkpoint["scaler"])
+
+    return int(checkpoint.get("epoch", 0))
+
+
+# -----------------------------------------------------------------------------
+# Distributed metric synchronization
+# -----------------------------------------------------------------------------
+
+
+def reduce_sum(tensor: torch.Tensor) -> torch.Tensor:
+    """All-reduce sum across ranks."""
+    if not dist.is_initialized():
+        return tensor
+    rt = tensor.clone()
+    dist.all_reduce(rt, op=dist.ReduceOp.SUM)
+    return rt
+
+
+def all_gather_variable_size(tensor: torch.Tensor) -> torch.Tensor:
+    """Gather tensors of potentially different sizes from all ranks.
+
+    Handles the case where ranks have different numbers of samples
+    (e.g., when drop_last=False for evaluation).
+    """
+    if not dist.is_initialized():
+        return tensor
+
+    world_size = dist.get_world_size()
+    local_size = torch.tensor([tensor.shape[0]], device=tensor.device, dtype=torch.long)
+    all_sizes = [torch.zeros(1, device=tensor.device, dtype=torch.long) for _ in range(world_size)]
+    dist.all_gather(all_sizes, local_size)
+
+    max_size = max(s.item() for s in all_sizes)
+
+    # Pad tensor to max_size
+    if tensor.shape[0] < max_size:
+        padding = torch.zeros(max_size - tensor.shape[0], *tensor.shape[1:], device=tensor.device, dtype=tensor.dtype)
+        tensor = torch.cat([tensor, padding], dim=0)
+
+    # Gather padded tensors
+    gathered = [torch.zeros_like(tensor) for _ in range(world_size)]
+    dist.all_gather(gathered, tensor)
+
+    # Trim to actual sizes and concatenate
+    result = []
+    for i, size in enumerate(all_sizes):
+        result.append(gathered[i][:size.item()])
+
+    return torch.cat(result, dim=0)
