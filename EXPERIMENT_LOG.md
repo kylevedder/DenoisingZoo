@@ -52,15 +52,56 @@ This is computed via `torch.func.jvp` with:
 
 ### JVP Performance on Different Hardware
 
-| Platform | ratio=0 | ratio=0.25 | ratio=0.75 | Notes |
-|----------|---------|------------|------------|-------|
-| MPS (M1/M2) | ~2.5s/batch | ~10-40s/batch | ~25s+/batch | Memory pressure causes slowdown |
-| A100-40GB | ~0.1s/batch | ~0.4s/batch | ~5.8s/batch | Practical for all ratios |
+| Platform | Forward (bs=64) | JVP (bs=64, ratio=0.75) | Notes |
+|----------|-----------------|-------------------------|-------|
+| MPS (M1/M2) | ~2.5s/batch | ~25s+/batch | Memory pressure, impractical |
+| A100-40GB | ~25ms/batch | ~150ms/batch | Efficient, scales sub-linearly |
 
 **Key findings:**
-- `torch.compile` + JVP is broken (~50x slowdown, ~295s/batch vs ~5.8s) - disable compile for ratio>0
-- ratio=0.75 OOMs with batch_size=128 on A100-40GB; requires batch_size=64 with grad accumulation
-- MPS is only practical for ratio=0 (standard FM)
+- `torch.compile` + JVP works fine after warmup (~1.03x speedup), but has ~82s initial compilation overhead
+- For long training runs, compile overhead amortizes - consider enabling for runs > 1 hour
+- ratio=0.75 OOMs with batch_size=128 on A100-40GB; use batch_size=64 with grad accumulation
+- MPS is only practical for ratio=0 (standard FM); use Modal/cloud for MeanFlow training
+
+### JVP Performance Analysis Summary (2026-01-22)
+
+**TL;DR: JVP is already efficient. No further optimizations needed.**
+
+Comprehensive A100-40GB benchmarks evaluated potential JVP optimizations for UNet (51M params) on CIFAR-10 32×32 with bf16 autocast.
+
+**Finding 1: JVP scales sub-linearly (efficient)**
+| Ratio | n_jvp | Time (ms) | Scaling vs Linear |
+|-------|-------|-----------|-------------------|
+| 0.25 | 16 | 139 | 1.0x (baseline) |
+| 0.50 | 32 | 144 | 0.52x (2x better than linear) |
+| 0.75 | 48 | 151 | 0.36x (3x better than linear) |
+| 1.00 | 64 | 154 | 0.28x (4x better than linear) |
+
+Doubling JVP samples only adds ~10% time, not 2x. JVP is MORE efficient at larger batches.
+
+**Finding 2: Alternative approaches are slower**
+| Approach | Result |
+|----------|--------|
+| Split JVP (∂v/∂z + ∂v/∂t separately) | 2x SLOWER, more memory |
+| Micro-batching | 4x SLOWER |
+
+**Finding 3: torch.compile provides NO benefit for JVP workloads**
+| Mode | JVP Time | Speedup |
+|------|----------|---------|
+| Uncompiled | 139.4ms | 1.00x |
+| default | 142.2ms | 0.98x (slower) |
+| reduce-overhead | 141.2ms | 0.99x |
+| max-autotune | 147.0ms | 0.95x (slower) |
+
+**Why**: torch.compile only compiles the forward pass, not the JVP operation itself. The overhead of calling compiled code from within `torch.func.jvp` actually hurts performance.
+
+**Recommendation**: Do NOT use torch.compile for MeanFlow training with ratio > 0.
+
+**Recommendations:**
+1. Use selective JVP (already implemented) - only compute for MeanFlow samples
+2. Use largest batch size that fits in memory
+3. Use gradient accumulation for effective batch_size=1024 with bs=64
+4. Do NOT use `compile=true` for MeanFlow training (torch.compile hurts JVP performance)
 
 ### Modal Infrastructure Hardening
 
@@ -255,7 +296,7 @@ python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow 
 
 ### 4.2b: CIFAR-10 MeanFlow ratio=0.5 (20 epochs)
 
-**Status:** IN PROGRESS
+**Status:** COMPLETED
 
 ```bash
 python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow epochs=20 \
@@ -264,15 +305,35 @@ python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow 
   precision=bf16 eval_every=5 save_every=5 run_name=cifar10_ratio05_20ep resume=false
 ```
 
-Job: https://modal.com/apps/kyle-c-vedder/main/ap-AAJKI9OKkrt0TpS0AP5urU
+| Metric | Value |
+|--------|-------|
+| Final Loss | 0.201 |
+| Energy Distance (epoch 5) | 2.93 |
+| Energy Distance (epoch 10) | 0.229 (best) |
+| Energy Distance (epoch 15) | 1.75 |
+| Energy Distance (epoch 20) | 0.498 |
+| Speed | ~3.8 min/epoch |
+
+**Checkpoints:** `cifar10_ratio05_20ep_epoch_{0005,0010,0015,0020}.pt`
+
+**Note:** High variance in energy distance across epochs. Best ED (0.229) comparable to ratio=0 baseline (0.239).
 
 ---
 
-### 4.3: CIFAR-10 Official Config (ratio=0.75)
+### 4.3: CIFAR-10 MeanFlow ratio=0.75 (20 epochs)
 
-**Status:** BLOCKED - JVP too slow
+**Status:** IN PROGRESS
 
-ratio=0.75 is 15x slower than ratio=0.25 due to JVP computation. Need to investigate JVP optimization before attempting full paper replication.
+Paper config uses ratio=0.75 with batch_size=1024. On A100-40GB, ratio=0.75 with batch_size=128 OOMs, so using batch_size=64 with gradient accumulation (2 steps) for effective batch=128.
+
+```bash
+python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow epochs=20 \
+  loss.meanflow_ratio=0.75 loss.logit_normal_mean=-2.0 loss.logit_normal_std=2.0 \
+  loss.weighting_power=0.75 dataloaders.train.batch_size=64 gradient_accumulation_steps=2 \
+  optimizer.lr=1e-4 precision=bf16 eval_every=5 save_every=5 run_name=cifar10_ratio075_20ep resume=false
+```
+
+Job: https://modal.com/apps/kyle-c-vedder/main/ap-franynSsOqrKhHk7bHoiHA
 
 ---
 
