@@ -356,6 +356,14 @@ Job: https://modal.com/apps/kyle-c-vedder/main/ap-tWmT9AeDNvuh2rCwvyD1Ic
 Started: 2026-01-22 ~18:36 UTC
 Speed: ~2.8 it/s (batch_size=32 with grad_accum=4)
 
+**Results (in progress):**
+| Metric | Epoch 5 | Epoch 10 | Epoch 15 | Epoch 20 |
+|--------|---------|----------|----------|----------|
+| Loss | 0.218 | - | - | - |
+| Energy Distance | 3.82 | - | - | - |
+
+**Checkpoints:** `cifar10_ratio075_20ep_v3_epoch_{0005}.pt`
+
 ---
 
 ## Proposed Experiments
