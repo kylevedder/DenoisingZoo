@@ -52,18 +52,58 @@ def build_device(device_str: str) -> torch.device:
 
 
 def build_precision_settings(precision: str, device: torch.device) -> PrecisionSettings:
+    """Build precision settings for mixed-precision training.
+
+    Args:
+        precision: One of "fp32", "bf16", or "fp16"
+        device: Target device (cuda, mps, or cpu)
+
+    Returns:
+        PrecisionSettings with appropriate autocast dtype and device_type
+
+    Raises:
+        ValueError: If precision is unknown, device is unsupported,
+                    fp16 is requested on non-CUDA, or bf16 is unsupported on CUDA
+    """
     p = precision.lower()
+
+    # Validate device type - only support cuda, mps, cpu
+    # Other backends (xpu, hpu, xla, meta) may have different autocast behavior
+    supported_devices = ("cuda", "mps", "cpu")
+    if device.type not in supported_devices:
+        raise ValueError(
+            f"Unsupported device type: {device.type}. "
+            f"Supported devices: {', '.join(supported_devices)}"
+        )
+
+    # Determine device_type for torch.autocast
+    device_type = device.type
+
     if p in {"fp32", "float32"}:
-        return PrecisionSettings(
-            None, False, "cuda" if device.type == "cuda" else "cpu"
-        )
+        return PrecisionSettings(None, False, device_type)
+
     if p in {"bf16", "bfloat16"}:
-        return PrecisionSettings(
-            torch.bfloat16, False, "cuda" if device.type == "cuda" else "cpu"
-        )
+        # BF16 requires hardware support on CUDA (Ampere+ GPUs)
+        if device.type == "cuda" and not torch.cuda.is_bf16_supported():
+            raise ValueError(
+                "bf16 precision requires Ampere or newer GPU. "
+                "Your GPU does not support bf16. Use fp16 or fp32 instead."
+            )
+        # BF16 works on CUDA (Ampere+), MPS, and CPU (CPU is slow but works)
+        # No GradScaler needed - BF16 has same exponent range as FP32
+        return PrecisionSettings(torch.bfloat16, False, device_type)
+
     if p in {"fp16", "float16", "half"}:
-        return PrecisionSettings(torch.float16, device.type == "cuda", "cuda")
-    raise ValueError(f"Unknown precision: {precision}")
+        # FP16 requires GradScaler due to limited dynamic range
+        # GradScaler only works reliably on CUDA
+        if device.type != "cuda":
+            raise ValueError(
+                f"fp16 precision requires CUDA device, got {device.type}. "
+                "Use bf16 for mixed-precision on MPS/CPU."
+            )
+        return PrecisionSettings(torch.float16, True, "cuda")
+
+    raise ValueError(f"Unknown precision: {precision}. Choose from: fp32, bf16, fp16")
 
 
 def build_scaler(settings: PrecisionSettings) -> torch.amp.GradScaler:
