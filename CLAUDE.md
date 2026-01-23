@@ -104,6 +104,15 @@ Both tools serve the same purpose: verifying math, code correctness, and design 
 3. Address feedback from both before declaring done
 4. If they disagree, investigate and resolve
 
+**Provide detailed context.** These agents work best with clear, complete information. Include:
+- The full code being reviewed (not just snippets)
+- Relevant equations or paper references
+- What the code is supposed to do
+- Any constraints or edge cases to consider
+- Related code that interacts with the changes
+
+The more context you provide, the more effective their verification will be.
+
 ### Example Prompts
 
 ```bash
