@@ -2,6 +2,8 @@
 
 Based on "Mean Flows for One-step Generative Modeling" (arXiv 2505.13447).
 Enables single-step generation by learning the mean velocity field.
+
+Matches official implementation: https://github.com/Gsunshine/py-meanflow
 """
 
 from __future__ import annotations
@@ -26,9 +28,11 @@ class MeanFlowLoss(nn.Module):
     Args:
         model: The velocity field model v(unified_input) -> velocity
         meanflow_ratio: Fraction of samples with r != t (default: 0.25)
-        logit_normal_mean: Mean of logit-normal time distribution (default: 0.0)
-        logit_normal_std: Std of logit-normal time distribution (default: 1.0)
-        weighting_power: Power p for adaptive weighting w = 1/(||Δ||² + c)^p (default: 0.5)
+        logit_normal_mean_t: Mean of logit-normal distribution for t (default: 0.0)
+        logit_normal_std_t: Std of logit-normal distribution for t (default: 1.0)
+        logit_normal_mean_r: Mean of logit-normal distribution for r (default: 0.0)
+        logit_normal_std_r: Std of logit-normal distribution for r (default: 1.0)
+        weighting_power: Power p for adaptive weighting w = 1/(||error||² + c)^p (default: 0.5)
         weighting_const: Constant c for adaptive weighting (default: 1e-4)
         eps: Small epsilon for numerical stability (default: 1e-5)
         use_batch_time: If True, prefer batch-provided t when available
@@ -40,6 +44,10 @@ class MeanFlowLoss(nn.Module):
         meanflow_ratio: float = 0.25,
         logit_normal_mean: float = 0.0,
         logit_normal_std: float = 1.0,
+        logit_normal_mean_t: float | None = None,
+        logit_normal_std_t: float | None = None,
+        logit_normal_mean_r: float | None = None,
+        logit_normal_std_r: float | None = None,
         weighting_power: float = 0.5,
         weighting_const: float = 1e-4,
         eps: float = 1e-5,
@@ -48,8 +56,19 @@ class MeanFlowLoss(nn.Module):
         super().__init__()
         self._model = model
         self.meanflow_ratio = meanflow_ratio
-        self.logit_normal_mean = logit_normal_mean
-        self.logit_normal_std = logit_normal_std
+        # Support both old API (single mean/std) and new API (separate t/r)
+        self.logit_normal_mean_t = (
+            logit_normal_mean_t if logit_normal_mean_t is not None else logit_normal_mean
+        )
+        self.logit_normal_std_t = (
+            logit_normal_std_t if logit_normal_std_t is not None else logit_normal_std
+        )
+        self.logit_normal_mean_r = (
+            logit_normal_mean_r if logit_normal_mean_r is not None else logit_normal_mean
+        )
+        self.logit_normal_std_r = (
+            logit_normal_std_r if logit_normal_std_r is not None else logit_normal_std
+        )
         self.weighting_power = weighting_power
         self.weighting_const = weighting_const
         self.eps = eps
@@ -60,16 +79,54 @@ class MeanFlowLoss(nn.Module):
         self._model = model
 
     def _sample_logit_normal(
-        self, shape: tuple[int, ...], device: torch.device, dtype: torch.dtype
+        self,
+        shape: tuple[int, ...],
+        device: torch.device,
+        dtype: torch.dtype,
+        mean: float,
+        std: float,
     ) -> torch.Tensor:
         """Sample from logit-normal distribution, clipped to (eps, 1-eps)."""
-        # Sample from normal, then apply sigmoid
         z = torch.randn(shape, device=device, dtype=dtype)
-        z = z * self.logit_normal_std + self.logit_normal_mean
+        z = z * std + mean
         t = torch.sigmoid(z)
-        # Clip to avoid exact 0 or 1
         t = t.clamp(self.eps, 1 - self.eps)
         return t
+
+    def _sample_two_timesteps(
+        self,
+        batch_size: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Sample (t, r) following official MeanFlow implementation.
+
+        Strategy (v0 from paper):
+        1. Sample t and r independently from logit-normal distributions
+        2. Sort so t >= r (swap if needed)
+        3. With probability (1 - ratio), set r = t (standard FM)
+
+        Returns:
+            t: End time tensor of shape (B, 1)
+            r: Start time tensor of shape (B, 1)
+        """
+        # Step 1: Sample two independent timesteps from logit-normal
+        t = self._sample_logit_normal(
+            (batch_size, 1), device, dtype, self.logit_normal_mean_t, self.logit_normal_std_t
+        )
+        r = self._sample_logit_normal(
+            (batch_size, 1), device, dtype, self.logit_normal_mean_r, self.logit_normal_std_r
+        )
+
+        # Step 2: Ensure t >= r by sorting
+        t, r = torch.maximum(t, r), torch.minimum(t, r)
+
+        # Step 3: With probability (1 - ratio), set r = t (standard FM)
+        prob = torch.rand(batch_size, 1, device=device, dtype=dtype)
+        mask = prob < (1 - self.meanflow_ratio)
+        r = torch.where(mask, t, r)
+
+        return t, r
 
     def _get_batch_time(
         self,
@@ -101,10 +158,18 @@ class MeanFlowLoss(nn.Module):
         device: torch.device | None,
         dtype: torch.dtype,
         sample_device: torch.device,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Select (t, r) time pair for the batch.
+
+        Returns:
+            t: End time tensor of shape (B, 1)
+            r: Start time tensor of shape (B, 1)
+        """
         if self.use_batch_time and "t" in batch:
-            return self._get_batch_time(batch, batch_size, device, dtype)
-        return self._sample_logit_normal((batch_size, 1), sample_device, dtype)
+            t = self._get_batch_time(batch, batch_size, device, dtype)
+            # When using batch time, r = t (standard FM behavior)
+            return t, t.clone()
+        return self._sample_two_timesteps(batch_size, sample_device, dtype)
 
     def _select_interpolated_state(
         self,
@@ -144,46 +209,89 @@ class MeanFlowLoss(nn.Module):
         r: torch.Tensor,
         v_true: torch.Tensor,
         use_meanflow: torch.Tensor,
-    ) -> torch.Tensor:
-        if not use_meanflow.any():
-            return v_true
+    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
+        """Compute MeanFlow target and prediction using JVP.
 
-        # We need to compute full JVP: v · ∂v/∂z + ∂v/∂t
-        # This requires differentiating w.r.t. both z and t with tangents [v, 1]
-        # Only compute for MeanFlow samples to save compute (~4x speedup at ratio=0.25)
+        Following official implementation, computes:
+            u_tgt = v - (t - r) * du/dt
+
+        where du/dt is the total derivative along the flow trajectory:
+            du/dt = ∂u/∂z · v + ∂u/∂r · 0 + ∂u/∂t · 1
+
+        The JVP is computed with 3 inputs (z, r, t) and tangents (v, 0, 1).
+
+        Returns:
+            u_tgt: Target tensor for all samples (MF samples have JVP-computed target)
+            mf_pred_info: None if no MF samples, else (mf_mask, u_pred_mf) where
+                u_pred_mf is the JVP primal output (with gradients attached)
+        """
+        if not use_meanflow.any():
+            return v_true, None
+
+        # Only compute for MeanFlow samples to save compute
         mf_mask = use_meanflow.squeeze(-1)  # (B,) bool
         z_t_mf = z_t[mf_mask]
         t_mf = t[mf_mask]
         r_mf = r[mf_mask]
+        v_true_mf = v_true[mf_mask]
 
-        def model_fn_mf(z: torch.Tensor, t_input: torch.Tensor) -> torch.Tensor:
-            time_input = make_time_input(t_input)
+        # Model function takes (z, r, t) as separate inputs
+        # This allows proper JVP computation with tangents (v, 0, 1)
+        def u_func(z: torch.Tensor, r_in: torch.Tensor, t_in: torch.Tensor) -> torch.Tensor:
+            # Build time input as (r, t) - our format
+            time_input = torch.cat([r_in, t_in], dim=1)
             unified = make_unified_flow_matching_input(z, time_input)
             return self._model(unified)
 
-        with torch.no_grad():
-            v_t_mf_tangent = model_fn_mf(z_t_mf, t_mf)
+        # Compute tangent for z: velocity v = dz/dt
+        # We use v_true (ground truth velocity) as the tangent
+        tangent_z = v_true_mf
+        tangent_r = torch.zeros_like(r_mf)  # dr/dt = 0 (start time fixed)
+        tangent_t = torch.ones_like(t_mf)  # dt/dt = 1
 
-        tangent_t = torch.ones_like(t_mf)
-        v_t_mf, jvp_mf = torch.func.jvp(
-            model_fn_mf,
-            (z_t_mf, t_mf),
-            (v_t_mf_tangent, tangent_t),
-        )
+        # Disable autocast for numerical stability during JVP
+        # (higher-order differentiation can be unstable in float16)
+        device_type = z_t_mf.device.type
+        with torch.amp.autocast(device_type, enabled=False):
+            # Cast to float32 for JVP if needed
+            z_float = z_t_mf.float()
+            r_float = r_mf.float()
+            t_float = t_mf.float()
+            tangent_z_float = tangent_z.float()
+            tangent_r_float = tangent_r.float()
+            tangent_t_float = tangent_t.float()
 
-        delta_t_mf = self._broadcast_time(t_mf - r_mf, v_t_mf)
-        u_tgt_mf = v_t_mf - delta_t_mf * jvp_mf
+            u_pred_mf, dudt_mf = torch.func.jvp(
+                u_func,
+                (z_float, r_float, t_float),
+                (tangent_z_float, tangent_r_float, tangent_t_float),
+            )
+
+            # Compute target: u_tgt = v - (t - r) * du/dt
+            delta_t_mf = self._broadcast_time(t_float - r_float, u_pred_mf)
+            u_tgt_mf = (v_true_mf.float() - delta_t_mf * dudt_mf).to(v_true.dtype)
 
         u_tgt = v_true.clone()
         u_tgt[mf_mask] = u_tgt_mf.detach()
-        return u_tgt
+
+        # Return prediction with gradients attached (NOT detached) for use in loss
+        return u_tgt, (mf_mask, u_pred_mf.to(v_true.dtype))
 
     def forward(
         self,
         batch: dict[str, torch.Tensor],
         device: torch.device | None = None,
     ) -> torch.Tensor:
-        """Compute MeanFlow loss.
+        """Compute MeanFlow loss with optimized batch splitting.
+
+        This implementation eliminates redundant forward passes by:
+        1. Running the model forward ONLY for standard FM samples
+        2. Reusing the JVP primal output for MeanFlow samples
+
+        Following official implementation:
+        1. Sample t and r using logit-normal + sorting (see _sample_two_timesteps)
+        2. Compute target using JVP with tangents (v, 0, 1)
+        3. Apply error-based adaptive weighting: w = 1/(||error||² + c)^p
 
         Args:
             batch: Dictionary containing:
@@ -208,18 +316,15 @@ class MeanFlowLoss(nn.Module):
         B = x.shape[0]
         dtype = x.dtype
 
-        # Sample time t from logit-normal (or use batch-provided t)
-        t = self._select_time(batch, B, device, dtype, x.device)
+        # Sample (t, r) following official implementation:
+        # - Both sampled from logit-normal, sorted so t >= r
+        # - With prob (1-ratio), r = t (standard FM)
+        t, r = self._select_time(batch, B, device, dtype, x.device)
 
-        # Determine which samples use r != t (MeanFlow) vs r = t (standard FM)
-        use_meanflow = (
-            torch.rand(B, 1, device=x.device, dtype=dtype) < self.meanflow_ratio
-        )
-
-        # Sample r uniformly in [0, t] for MeanFlow samples
-        # For standard FM, r = t
-        r_uniform = torch.rand(B, 1, device=x.device, dtype=dtype) * t
-        r = torch.where(use_meanflow, r_uniform, t)
+        # Determine which samples use MeanFlow (r != t) vs standard FM (r == t)
+        use_meanflow = (r != t).any(dim=1, keepdim=True)
+        mf_mask = use_meanflow.squeeze(-1)  # (B,) bool
+        fm_mask = ~mf_mask  # (B,) bool - standard flow matching samples
 
         if not is_time_channel_module(self._model):
             raise ValueError(
@@ -230,44 +335,46 @@ class MeanFlowLoss(nn.Module):
         # z_t = (1 - t) * x + t * y
         z_t = self._select_interpolated_state(batch, x, y, t, device, dtype)
 
-        # Ground truth velocity
+        # Ground truth velocity: v = y - x (points from noise to data)
         v_true = y - x
 
-        # Compute model predictions.
-        # For standard FM samples, time input should be (t, 1).
-        # For MeanFlow samples, time input should be (r, t).
-        time_pred = self._build_time_pred(t, r, use_meanflow)
+        # Build time input: (r, t) for all samples
+        time_pred = torch.cat([r, t], dim=1)
         unified_t = make_unified_flow_matching_input(z_t, time_pred)
 
-        # Always compute u(z_t, r, t) for MeanFlow samples and v(z_t, t) for FM samples
-        v_pred = self._model(unified_t)
+        # Compute target and get JVP primal for MeanFlow samples
+        # From paper Eq. 7: u_tgt = v - (t - r) * du/dt
+        u_tgt, mf_pred_info = self._compute_target(z_t, t, r, v_true, use_meanflow)
 
-        # Compute target for MeanFlow samples
-        # From paper Eq. 6: u = v_t - (t - r) * du/dt
-        # From paper Eq. 8: du/dt = v · ∂u/∂z + ∂u/∂t (total derivative along trajectory)
-        # So: u_tgt = v_t - (t - r) * (v_t · ∂v/∂z + ∂v/∂t)
+        # Allocate prediction tensor
+        u_pred = torch.empty_like(v_true)
 
-        u_tgt = self._compute_target(z_t, t, r, v_true, use_meanflow)
+        # Forward pass ONLY for standard FM samples (if any exist)
+        if fm_mask.any():
+            unified_fm = unified_t[fm_mask]
+            u_pred_fm = self._model(unified_fm)
+            u_pred[fm_mask] = u_pred_fm
 
-        # Compute loss with adaptive weighting
-        diff = v_pred - u_tgt
-        sq_error = (diff**2).flatten(1).mean(dim=1)  # (B,)
+        # Use JVP primal for MeanFlow samples (if any exist)
+        if mf_pred_info is not None:
+            mf_mask_from_jvp, u_pred_mf = mf_pred_info
+            u_pred[mf_mask_from_jvp] = u_pred_mf
 
-        # Adaptive weighting: w = 1 / (||delta||² + c)^p
-        # where delta = u_tgt - v_true
+        # Compute squared error per sample (sum over spatial dims, not mean)
+        # This matches official: loss.sum(dim=(1, 2, 3))
+        diff = u_pred - u_tgt
+        sq_error = (diff**2).flatten(1).sum(dim=1)  # (B,) - sum, not mean
+
+        # Adaptive weighting following official implementation:
+        # adp_wt = (loss + eps)^p; loss = loss / adp_wt
+        # This gives: loss * (loss + eps)^(-p), effectively a powered L2 metric
+        # With p=0.5: loss / sqrt(loss) = sqrt(loss) (Euclidean distance)
         if self.weighting_power > 0:
-            # Weight based on the MeanFlow correction magnitude
             with torch.no_grad():
-                delta = (u_tgt.detach() - v_true).flatten(1)
-                delta_sq = (delta**2).sum(dim=1)
-                weights = (
-                    1.0 / (delta_sq + self.weighting_const) ** self.weighting_power
-                )
-                weights = weights / weights.mean()  # Normalize to preserve scale
+                adp_wt = (sq_error.detach() + self.weighting_const) ** self.weighting_power
+            loss = (sq_error / adp_wt).mean()
         else:
-            weights = torch.ones(B, device=x.device, dtype=dtype)
-
-        loss = (weights * sq_error).mean()
+            loss = sq_error.mean()
 
         return loss
 

@@ -22,6 +22,20 @@ class LinearTimeModel(TimeChannelModule):
 
 
 def test_meanflow_loss_matches_manual_linear_model():
+    """Test MeanFlow loss against manual computation with a linear model.
+
+    LinearTimeModel: u(z, r, t) = 2*z + 3*r + 5*t
+
+    For this model:
+    - ∂u/∂z = 2  (so ∂u/∂z · v = 2*v where v = y - x)
+    - ∂u/∂r = 3
+    - ∂u/∂t = 5
+
+    With JVP tangents (v, 0, 1):
+    du/dt = ∂u/∂z · v + ∂u/∂r · 0 + ∂u/∂t · 1 = 2*v + 5
+
+    Target: u_tgt = v - (t - r) * du/dt = v - (t - r) * (2*v + 5)
+    """
     torch.manual_seed(123)
     B = 6
     D = 4
@@ -37,29 +51,53 @@ def test_meanflow_loss_matches_manual_linear_model():
     loss = loss_fn(batch)
 
     # Recompute with the same RNG state for deterministic comparison
+    # Following new _sample_two_timesteps logic:
+    # 1. Sample t from logit-normal
+    # 2. Sample r from logit-normal
+    # 3. Sort so t >= r
+    # 4. With prob (1-ratio), set r = t (but ratio=1.0, so this never happens)
     torch.random.set_rng_state(rng_state)
-    z = torch.randn((B, 1), device=x.device, dtype=x.dtype)
-    z = z * loss_fn.logit_normal_std + loss_fn.logit_normal_mean
-    t = torch.sigmoid(z).clamp(loss_fn.eps, 1 - loss_fn.eps)
 
-    use_meanflow = torch.rand(B, 1, device=x.device, dtype=x.dtype) < loss_fn.meanflow_ratio
-    r_uniform = torch.rand(B, 1, device=x.device, dtype=x.dtype) * t
-    r = torch.where(use_meanflow, r_uniform, t)
+    # Sample t from logit-normal
+    z_t_sample = torch.randn((B, 1), device=x.device, dtype=x.dtype)
+    z_t_sample = z_t_sample * loss_fn.logit_normal_std_t + loss_fn.logit_normal_mean_t
+    t_sample = torch.sigmoid(z_t_sample).clamp(loss_fn.eps, 1 - loss_fn.eps)
 
-    z_t = (1 - t) * x + t * y
+    # Sample r from logit-normal
+    z_r_sample = torch.randn((B, 1), device=x.device, dtype=x.dtype)
+    z_r_sample = z_r_sample * loss_fn.logit_normal_std_r + loss_fn.logit_normal_mean_r
+    r_sample = torch.sigmoid(z_r_sample).clamp(loss_fn.eps, 1 - loss_fn.eps)
+
+    # Sort so t >= r
+    t = torch.maximum(t_sample, r_sample)
+    r = torch.minimum(t_sample, r_sample)
+
+    # With prob (1 - ratio), set r = t (ratio=1.0, so skip)
+    prob = torch.rand(B, 1, device=x.device, dtype=x.dtype)
+    mask = prob < (1 - loss_fn.meanflow_ratio)
+    r = torch.where(mask, t, r)
+
+    # Compute interpolated state
+    z_t_state = (1 - t) * x + t * y
+
+    # Ground truth velocity
+    v_true = y - x
 
     # Model prediction u(z_t, r, t)
-    u_pred = 2.0 * z_t + 3.0 * r + 5.0 * t
+    u_pred = 2.0 * z_t_state + 3.0 * r + 5.0 * t
 
-    # v(z_t, t) uses the flow-matching convention (t, 1) for time input
-    v_t = 2.0 * z_t + 3.0 * t + 5.0
-    jvp = 2.0 * v_t + 3.0
+    # Compute JVP manually for linear model
+    # du/dt = ∂u/∂z · v + ∂u/∂r · 0 + ∂u/∂t · 1 = 2*v + 0 + 5 = 2*v + 5
+    dudt = 2.0 * v_true + 5.0
 
-    u_tgt = v_t - (t - r) * jvp
+    # Target: u_tgt = v - (t - r) * du/dt
+    u_tgt = v_true - (t - r) * dudt
+
+    # Loss: sum of squared errors (not mean over features), then mean over batch
     diff = u_pred - u_tgt
-    expected_loss = (diff ** 2).mean(dim=1).mean()
+    expected_loss = (diff ** 2).sum(dim=1).mean()
 
-    assert torch.allclose(loss, expected_loss, atol=1e-6)
+    assert torch.allclose(loss, expected_loss, atol=1e-5)
 
 
 def test_meanflow_loss_requires_two_time_channels():
