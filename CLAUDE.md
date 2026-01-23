@@ -222,6 +222,39 @@ python launcher.py run_name=my_experiment compile=true compile_mode=max-autotune
 
 **When to use:** Try `compile=true` when GPU utilization is low or training is CPU-bound. May help fuse small kernels on MPS.
 
+### Mixed Precision (BF16)
+
+**BF16 is the recommended precision for MeanFlow experiments.** It provides ~2x memory reduction with minimal precision loss.
+
+```bash
+# Recommended for MeanFlow training
+python launcher.py run_name=my_experiment precision=bf16 loss=meanflow
+
+# Works on CUDA, MPS, and CPU
+python launcher.py run_name=my_experiment precision=bf16 device=mps
+```
+
+**Precision options:**
+- `fp32` - Full precision (default, safest)
+- `bf16` - BFloat16 mixed precision (recommended for MeanFlow)
+- `fp16` - Float16 with GradScaler (CUDA only, not recommended)
+
+**How it works:**
+- Model weights stay in fp32
+- Forward/backward passes use bf16 via `torch.autocast`
+- JVP computation in MeanFlow loss automatically runs in fp32 for numerical stability
+- No GradScaler needed (bf16 has same dynamic range as fp32)
+
+**Device support:**
+- **CUDA**: Requires Ampere or newer GPU (A100, A10G, RTX 30xx+). Pre-Ampere GPUs will raise an error.
+- **MPS**: Fully supported on Apple Silicon
+- **CPU**: Supported but slow (useful for debugging)
+
+**Why bf16 over fp16:**
+- bf16 has same exponent range as fp32 (no gradient underflow issues)
+- No GradScaler complexity
+- Better numerical stability for JVP/higher-order derivatives
+
 ### CUDA Performance Optimizations
 
 On CUDA devices, the following optimizations are automatically enabled:
