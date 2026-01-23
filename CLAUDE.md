@@ -91,66 +91,43 @@ def process(model):
 **CRITICAL: Before declaring any plan or code change complete, get verification from both Codex and Gemini.**
 
 Two CLI tools are available for external validation:
-- **Codex** (`codex`) - OpenAI Codex 5.2 High Reasoning, best for mathematical derivations and formal verification
-- **Gemini** (`gemini`) - Google Gemini 3 with 1M context, best for architectural review and broad code understanding
+- **Codex** (`codex`) - OpenAI Codex 5.2 High Reasoning
+- **Gemini** (`gemini`) - Google Gemini 3 (1M context)
+
+Both tools serve the same purpose: verifying math, code correctness, and design decisions. Use both for independent verification.
 
 ### Required Verification Workflow
 
 **For all non-trivial changes:**
 1. Write initial implementation or plan
-2. Run **Codex** for mathematical/logical correctness
-3. Run **Gemini** for architectural review and edge cases
-4. Address feedback from both before declaring done
-5. If either raises concerns, iterate and re-verify
+2. Run **both Codex and Gemini** with the same verification prompt
+3. Address feedback from both before declaring done
+4. If they disagree, investigate and resolve
 
-### When to Use Codex
+### Example Prompts
 
 ```bash
 # Mathematical derivations and paper implementations
 codex "Review this MeanFlow loss implementation against Equation 7 from the paper: [paste code]"
+gemini "Review this MeanFlow loss implementation against Equation 7 from the paper: [paste code]"
 
 # Gradient/JVP/VJP verification
 codex "Verify the JVP computation in this loss function matches the chain rule derivation"
+gemini "Verify the JVP computation in this loss function matches the chain rule derivation"
 
-# Paper-to-code translation
-codex "Does this PyTorch implementation correctly implement the velocity field from Section 3.2?"
-```
-
-**Codex strengths:**
-- Loss functions from paper equations
-- Gradient computations and automatic differentiation
-- Mathematical notation → code translation
-- Numerical stability analysis
-- Normalization constants and boundary conditions
-
-### When to Use Gemini
-
-```bash
 # Architectural review
+codex "Review this training loop refactor for correctness and edge cases"
 gemini "Review this training loop refactor for correctness and edge cases"
 
-# Plan validation before implementation
-gemini "Here's my plan to add multi-GPU support. Review for issues: [paste plan]"
-
-# Code review with full context
+# Code review
+codex "Review these changes to the dataloader. Are there any bugs or missing cases?"
 gemini "Review these changes to the dataloader. Are there any bugs or missing cases?"
-
-# Integration concerns
-gemini "I'm changing the checkpoint format. What backwards compatibility issues might arise?"
 ```
-
-**Gemini strengths:**
-- Architectural decisions and design review
-- Large codebase understanding (1M context)
-- Edge case identification
-- API design and interface review
-- Integration and compatibility concerns
 
 ### Sign-off Checklist
 
 Before declaring a task complete:
-- [ ] Codex reviewed any mathematical/algorithmic changes
-- [ ] Gemini reviewed the overall approach and edge cases
+- [ ] Both Codex and Gemini reviewed the changes
 - [ ] Both tools' feedback has been addressed
 - [ ] If disagreements exist between tools, investigate and resolve
 
