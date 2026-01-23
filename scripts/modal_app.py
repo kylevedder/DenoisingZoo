@@ -241,6 +241,65 @@ def train_on_modal_multigpu(extra_args: list[str], num_gpus: int = 2) -> None:
 
 
 @app.function(
+    image=image,
+    gpu="A100-40GB",
+    timeout=3600,  # 1 hour max for benchmarks
+    volumes={"/data": training_volume},
+)
+def run_benchmark(script_name: str) -> str:
+    """Run a benchmark script on Modal with NVIDIA GPU.
+
+    Args:
+        script_name: Name of the script in scripts/ directory (e.g., "benchmark_jvp_baseline.py")
+
+    Returns:
+        Output from the benchmark script
+    """
+    app_dir = Path("/root/app")
+    os.chdir(app_dir)
+
+    # Create outputs directory for results
+    Path("outputs").mkdir(parents=True, exist_ok=True)
+
+    # Verify GPU availability
+    import torch
+    print(f"PyTorch version: {torch.__version__}")
+    print(f"CUDA available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        print(f"Device name: {torch.cuda.get_device_name()}")
+
+    script_path = app_dir / "scripts" / script_name
+    if not script_path.exists():
+        raise FileNotFoundError(f"Script not found: {script_path}")
+
+    cmd = ["python", str(script_path)]
+    print(f"Running benchmark: {' '.join(cmd)}")
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    output = result.stdout
+    if result.stderr:
+        output += "\n\nSTDERR:\n" + result.stderr
+
+    print(output)
+
+    # Copy any output files to volume for persistence
+    outputs_dir = Path("outputs")
+    volume_outputs = Path("/data/benchmark_outputs")
+    volume_outputs.mkdir(parents=True, exist_ok=True)
+
+    for json_file in outputs_dir.glob("benchmark_*.json"):
+        import shutil
+        dest = volume_outputs / json_file.name
+        shutil.copy(json_file, dest)
+        print(f"Saved results to volume: {dest}")
+
+    training_volume.commit()
+
+    return output
+
+
+@app.function(
     image=util_image,
     volumes={"/data": training_volume},
 )
@@ -496,6 +555,7 @@ def _print_usage():
     print("  ckpts             List checkpoints in Modal volume")
     print("  download <path>   Download checkpoint from Modal (e.g., unet/last.pt)")
     print("  multigpu <args>   Run multi-GPU (2x A100) training on Modal")
+    print("  benchmark <script> Run a benchmark script on Modal A100")
     print("  <hydra args>      Run single-GPU training on Modal with given arguments")
 
 
@@ -543,6 +603,19 @@ if __name__ == "__main__":
             sys.exit(1)
         extra_args = sys.argv[2:]
         run_modal_training_multigpu(extra_args, num_gpus=2)
+    elif len(sys.argv) > 1 and sys.argv[1] == "benchmark":
+        # Run benchmark script: python scripts/modal_app.py benchmark <script_name>
+        if len(sys.argv) < 3:
+            print("Usage: python scripts/modal_app.py benchmark <script_name>")
+            print("  script_name: Name of script in scripts/ (e.g., benchmark_jvp_baseline.py)")
+            sys.exit(1)
+        script_name = sys.argv[2]
+        print(f"Running benchmark script: {script_name}")
+        with app.run():
+            output = run_benchmark.remote(script_name)
+            print("\n" + "="*60)
+            print("BENCHMARK COMPLETE")
+            print("="*60)
     elif len(sys.argv) > 1 and sys.argv[1] in ("help", "-h", "--help"):
         _print_usage()
     elif len(sys.argv) == 1:
