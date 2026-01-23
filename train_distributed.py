@@ -265,14 +265,6 @@ def train(cfg: DictConfig) -> None:
     seed = cfg.get("seed", 42)
     worker_init_fn = seed_everything(seed, global_rank)
 
-    # Check FSDP + MeanFlow incompatibility
-    distributed_cfg = cfg.get("distributed", {})
-    strategy = distributed_cfg.get("strategy", "ddp") if distributed else None
-    if strategy == "fsdp":
-        loss_target = cfg.loss.get("_target_", "")
-        if "MeanFlowLoss" in loss_target:
-            raise ValueError("FSDP is not compatible with MeanFlow loss (JVP). Use DDP instead.")
-
     # Build dataloaders: train uses DistributedSampler, eval runs on rank 0 only
     train_loader, train_sampler = build_dataloader_from_config_distributed(
         cfg.dataloaders.train, device, distributed, is_train=True, worker_init_fn=worker_init_fn
@@ -283,7 +275,7 @@ def train(cfg: DictConfig) -> None:
     )
 
     # Build model with DDP wrapping
-    model = build_model_distributed(cfg, device, local_rank if distributed else None, strategy)
+    model = build_model_distributed(cfg, device, local_rank if distributed else None, "ddp" if distributed else None)
 
     # Get architecture name for checkpoint path (unwrap if needed)
     arch_name = unwrap_compiled(unwrap_model(model)).__class__.__name__.lower()

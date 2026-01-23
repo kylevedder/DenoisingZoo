@@ -465,15 +465,8 @@ def setup_distributed(cfg: DictConfig) -> tuple[int, int, int]:
     if torch.cuda.is_available():
         torch.cuda.set_device(local_rank)
 
-    # Select backend based on availability
-    # NCCL for CUDA, Gloo for CPU/MPS
-    if torch.cuda.is_available():
-        backend = "nccl"
-    else:
-        backend = "gloo"
-
     dist.init_process_group(
-        backend=backend,
+        backend="nccl",
         init_method="env://",
     )
 
@@ -525,10 +518,10 @@ def seed_everything(seed: int, rank: int = 0) -> Callable[[int], None]:
 
 
 def unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
-    """Recursively unwrap DDP/FSDP/compiled model to get base module."""
+    """Recursively unwrap DDP/compiled model to get base module."""
     unwrapped = model
     while True:
-        if hasattr(unwrapped, "module"):  # DDP, FSDP
+        if hasattr(unwrapped, "module"):  # DDP
             unwrapped = unwrapped.module
         elif hasattr(unwrapped, "_orig_mod"):  # torch.compile
             unwrapped = unwrapped._orig_mod
@@ -596,7 +589,7 @@ def build_model_distributed(
         cfg: Config with model and compile settings
         device: Target device
         local_rank: Local GPU rank (required for distributed)
-        distributed_strategy: "ddp" or "fsdp" or None
+        distributed_strategy: "ddp" or None
 
     Returns:
         Model (possibly DDP-wrapped)
@@ -621,17 +614,6 @@ def build_model_distributed(
             find_unused_parameters=cfg.get("distributed", {}).get("find_unused_parameters", False),
             static_graph=False,
         )
-    elif distributed_strategy == "fsdp" and local_rank is not None:
-        from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-        from torch.distributed.fsdp import ShardingStrategy
-
-        strategy_map = {
-            "full": ShardingStrategy.FULL_SHARD,
-            "grad_op": ShardingStrategy.SHARD_GRAD_OP,
-            "no": ShardingStrategy.NO_SHARD,
-        }
-        sharding = strategy_map.get(cfg.get("distributed", {}).get("fsdp_sharding", "full"))
-        model = FSDP(model, sharding_strategy=sharding, device_id=local_rank)
 
     # Optional torch.compile AFTER DDP (experimental)
     if compile_after:

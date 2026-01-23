@@ -11,11 +11,9 @@ precision: fp32       # choices: fp32, bf16, fp16
 compile: false        # torch.compile the model (may speed up training)
 compile_mode: default # torch.compile mode: default, reduce-overhead, max-autotune
 
-# Distributed training (multi-GPU)
+# Distributed training (multi-GPU via DDP)
 distributed:
   enabled: false              # Enable multi-GPU (must be true when using torchrun)
-  strategy: ddp               # ddp | fsdp (FSDP not compatible with MeanFlow)
-  fsdp_sharding: full         # full | grad_op | no (FSDP only)
   find_unused_parameters: false
   compile_after_ddp: false    # Experimental: compile after DDP wrapping
 
