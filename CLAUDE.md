@@ -120,9 +120,9 @@ The more context you provide, the more effective their verification will be.
 echo "Your prompt here" | codex exec
 ```
 
-**Gemini** uses positional arguments (ignore the punycode deprecation warning):
+**Gemini** uses positional arguments:
 ```bash
-gemini "Your prompt here"
+NODE_NO_WARNINGS=1 gemini "Your prompt here"
 ```
 
 ### Example Prompts
@@ -130,19 +130,19 @@ gemini "Your prompt here"
 ```bash
 # Mathematical derivations and paper implementations
 echo "Review this MeanFlow loss implementation against Equation 7 from the paper: [paste code]" | codex exec
-gemini "Review this MeanFlow loss implementation against Equation 7 from the paper: [paste code]"
+NODE_NO_WARNINGS=1 gemini "Review this MeanFlow loss implementation against Equation 7 from the paper: [paste code]"
 
 # Gradient/JVP/VJP verification
 echo "Verify the JVP computation in this loss function matches the chain rule derivation" | codex exec
-gemini "Verify the JVP computation in this loss function matches the chain rule derivation"
+NODE_NO_WARNINGS=1 gemini "Verify the JVP computation in this loss function matches the chain rule derivation"
 
 # Architectural review
 echo "Review this training loop refactor for correctness and edge cases" | codex exec
-gemini "Review this training loop refactor for correctness and edge cases"
+NODE_NO_WARNINGS=1 gemini "Review this training loop refactor for correctness and edge cases"
 
 # Code review
 echo "Review these changes to the dataloader. Are there any bugs or missing cases?" | codex exec
-gemini "Review these changes to the dataloader. Are there any bugs or missing cases?"
+NODE_NO_WARNINGS=1 gemini "Review these changes to the dataloader. Are there any bugs or missing cases?"
 ```
 
 ### Sign-off Checklist
