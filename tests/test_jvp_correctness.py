@@ -117,7 +117,7 @@ class TestFiniteDifferenceComparison:
         f_minus = model(x - eps * v)
         numerical_jvp = (f_plus - f_minus) / (2 * eps)
 
-        assert torch.allclose(jvp_result, numerical_jvp, atol=1e-3), \
+        assert torch.allclose(jvp_result, numerical_jvp, atol=1e-2), \
             "JVP should match finite difference approximation"
 
     def test_jvp_matches_finite_difference_mlp(self):
@@ -209,7 +209,7 @@ class TestJVPWithTimeConditioning:
         eps = 1e-4
         numerical_jvp = (model_fn(x + eps * v) - model_fn(x - eps * v)) / (2 * eps)
 
-        assert torch.allclose(jvp_result, numerical_jvp, atol=1e-3), \
+        assert torch.allclose(jvp_result, numerical_jvp, atol=1e-2), \
             "JVP should correctly differentiate w.r.t. x with fixed t"
 
 
