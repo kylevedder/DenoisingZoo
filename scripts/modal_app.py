@@ -78,33 +78,21 @@ training_volume = modal.Volume.from_name("training-data", create_if_missing=True
 util_image = modal.Image.debian_slim(python_version="3.12")
 
 
-@app.function(
-    image=image,
-    gpu="A100-40GB",
-    timeout=43200,  # 12 hours max per attempt
-    volumes={"/data": training_volume},
-    retries=modal.Retries(
-        max_retries=5,           # Up to 5 retries (60 hours total worst case)
-        initial_delay=30.0,      # 30 second delay before retry
-        backoff_coefficient=1.0, # Fixed delay (not exponential)
-    ),
-)
-def train_on_modal(extra_args: list[str]) -> None:
-    """Run training on Modal with NVIDIA GPU."""
-    app_dir = Path("/root/app")
+def _setup_modal_environment(app_dir: Path) -> None:
+    """Common setup for Modal training environment."""
     os.chdir(app_dir)
 
     # Create data directories
     Path("/data").mkdir(parents=True, exist_ok=True)
     Path("data").mkdir(parents=True, exist_ok=True)
 
-    # Set trackio storage to persistent volume so logs survive container shutdown
+    # Set trackio storage to persistent volume
     trackio_dir = Path("/data/trackio")
     trackio_dir.mkdir(parents=True, exist_ok=True)
     os.environ["TRACKIO_DIR"] = str(trackio_dir)
     print(f"[modal] Trackio storage: {trackio_dir}")
 
-    # If a pre-uploaded archive exists in the persisted volume, extract it
+    # Extract CelebA if needed
     try:
         data_dir = Path("/data")
         archive = data_dir / "celeba.tar.gz"
@@ -118,9 +106,66 @@ def train_on_modal(extra_args: list[str]) -> None:
     except (OSError, subprocess.CalledProcessError) as exc:
         print(f"[modal] Warning: dataset extraction skipped: {exc}")
 
+    # Setup checkpoint symlink
+    import shutil
+    ckpt_volume_dir = Path("/data/ckpts")
+    ckpt_volume_dir.mkdir(parents=True, exist_ok=True)
+    outputs_dir = Path("outputs")
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_local_dir = outputs_dir / "ckpts"
+    if ckpt_local_dir.is_symlink():
+        if ckpt_local_dir.resolve() != ckpt_volume_dir.resolve():
+            ckpt_local_dir.unlink()
+    elif ckpt_local_dir.exists():
+        if ckpt_local_dir.is_dir():
+            shutil.rmtree(ckpt_local_dir)
+        else:
+            ckpt_local_dir.unlink()
+    if not ckpt_local_dir.exists() and not ckpt_local_dir.is_symlink():
+        ckpt_local_dir.symlink_to(ckpt_volume_dir)
+    print(f"[modal] Checkpoints: {ckpt_local_dir} -> {ckpt_volume_dir}")
+
+
+def _prepare_training_args(extra_args: list[str]) -> list[str]:
+    """Prepare training arguments with Modal-specific defaults."""
+    args = list(extra_args)
+
+    def _has_prefix(prefix: str) -> bool:
+        return any(str(a).startswith(prefix) for a in args)
+
+    using_cifar = any("dataloaders=cifar10" in str(a) for a in args)
+
+    if not using_cifar:
+        if not _has_prefix("dataloaders.train.dataset.root="):
+            args.append("dataloaders.train.dataset.root=/data/celeba")
+        if not _has_prefix("dataloaders.eval.dataset.root="):
+            args.append("dataloaders.eval.dataset.root=/data/celeba")
+
+    if not any(a.startswith("resume=") for a in args):
+        args.append("resume=true")
+        print("[modal] Auto-enabled resume=true for retry resilience")
+
+    return args
+
+
+@app.function(
+    image=image,
+    gpu="A100-40GB",
+    timeout=43200,  # 12 hours max per attempt
+    volumes={"/data": training_volume},
+    retries=modal.Retries(
+        max_retries=5,           # Up to 5 retries (60 hours total worst case)
+        initial_delay=30.0,      # 30 second delay before retry
+        backoff_coefficient=1.0, # Fixed delay (not exponential)
+    ),
+)
+def train_on_modal(extra_args: list[str]) -> None:
+    """Run single-GPU training on Modal with NVIDIA GPU."""
+    app_dir = Path("/root/app")
+    _setup_modal_environment(app_dir)
+
     # Verify GPU availability
     import torch
-
     print(f"PyTorch version: {torch.__version__}")
     print(f"CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
@@ -128,59 +173,71 @@ def train_on_modal(extra_args: list[str]) -> None:
         print(f"Current device: {torch.cuda.current_device()}")
         print(f"Device name: {torch.cuda.get_device_name()}")
 
-    # Persist checkpoints to volume via symlink
-    import shutil
-    ckpt_volume_dir = Path("/data/ckpts")
-    ckpt_volume_dir.mkdir(parents=True, exist_ok=True)
-    outputs_dir = Path("outputs")
-    outputs_dir.mkdir(parents=True, exist_ok=True)
-    ckpt_local_dir = outputs_dir / "ckpts"
-    # Handle existing path: remove if it's not a correct symlink
-    if ckpt_local_dir.is_symlink():
-        # Check if symlink points to the right place
-        if ckpt_local_dir.resolve() != ckpt_volume_dir.resolve():
-            ckpt_local_dir.unlink()
-    elif ckpt_local_dir.exists():
-        # It's a file or directory, remove it
-        if ckpt_local_dir.is_dir():
-            shutil.rmtree(ckpt_local_dir)
-        else:
-            ckpt_local_dir.unlink()
-    # Create symlink if it doesn't exist
-    if not ckpt_local_dir.exists() and not ckpt_local_dir.is_symlink():
-        ckpt_local_dir.symlink_to(ckpt_volume_dir)
-    print(f"[modal] Checkpoints: {ckpt_local_dir} -> {ckpt_volume_dir}")
-
-    args = list(extra_args)
-
-    def _has_prefix(prefix: str) -> bool:
-        return any(str(a).startswith(prefix) for a in args)
-
-    # Check if using CIFAR-10 (auto-downloads) vs CelebA (needs volume)
-    using_cifar = any("dataloaders=cifar10" in str(a) for a in args)
-
-    if not using_cifar:
-        # CelebA: use persisted volume paths
-        if not _has_prefix("dataloaders.train.dataset.root="):
-            args.append("dataloaders.train.dataset.root=/data/celeba")
-        if not _has_prefix("dataloaders.eval.dataset.root="):
-            args.append("dataloaders.eval.dataset.root=/data/celeba")
-
-    # Always enable resume - safe even if no checkpoint exists
-    # This ensures automatic recovery when retries trigger
-    if not any(a.startswith("resume=") for a in args):
-        args.append("resume=true")
-        print("[modal] Auto-enabled resume=true for retry resilience")
-
+    args = _prepare_training_args(extra_args)
     cmd = ["python", "train.py", "device=cuda", *args]
     print("Running command:", " ".join(cmd))
 
-    # Run training - Modal Volumes auto-commit periodically
     subprocess.run(cmd, check=True)
 
-    # Final commit for immediate visibility after completion
     training_volume.commit()
     print("[modal] Final volume commit - training complete")
+
+
+@app.function(
+    image=image,
+    gpu="A100-40GB:2",  # Request 2 A100 GPUs
+    timeout=43200,  # 12 hours max per attempt
+    volumes={"/data": training_volume},
+    retries=modal.Retries(
+        max_retries=5,
+        initial_delay=30.0,
+        backoff_coefficient=1.0,
+    ),
+)
+def train_on_modal_multigpu(extra_args: list[str], num_gpus: int = 2) -> None:
+    """Run multi-GPU training on Modal using DDP with torchrun.
+
+    Args:
+        extra_args: Hydra config overrides
+        num_gpus: Number of GPUs to use (must match function GPU allocation)
+    """
+    app_dir = Path("/root/app")
+    _setup_modal_environment(app_dir)
+
+    # Verify GPU availability
+    import torch
+    print(f"PyTorch version: {torch.__version__}")
+    print(f"CUDA available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        device_count = torch.cuda.device_count()
+        print(f"CUDA device count: {device_count}")
+        for i in range(device_count):
+            print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
+
+        if device_count < num_gpus:
+            raise RuntimeError(f"Requested {num_gpus} GPUs but only {device_count} available")
+
+    args = _prepare_training_args(extra_args)
+
+    # Enable distributed training
+    if not any(a.startswith("distributed.enabled=") for a in args):
+        args.append("distributed.enabled=true")
+
+    # Use torchrun for multi-GPU training
+    cmd = [
+        "torchrun",
+        f"--nproc_per_node={num_gpus}",
+        "--standalone",
+        "train_distributed.py",
+        "device=cuda",
+        *args,
+    ]
+    print("Running command:", " ".join(cmd))
+
+    subprocess.run(cmd, check=True)
+
+    training_volume.commit()
+    print("[modal] Final volume commit - multi-GPU training complete")
 
 
 @app.function(
@@ -341,11 +398,19 @@ def download_checkpoint_from_modal(remote_path: str, local_path: str | None = No
 
 
 def run_modal_training(extra_args: list[str]) -> None:
-    """Helper function to run Modal training from launcher.py."""
-    print("Starting Modal training job...")
+    """Helper function to run single-GPU Modal training from launcher.py."""
+    print("Starting Modal training job (single GPU)...")
     with app.run():
         train_on_modal.remote(extra_args)
     print("Modal training job completed!")
+
+
+def run_modal_training_multigpu(extra_args: list[str], num_gpus: int = 2) -> None:
+    """Helper function to run multi-GPU Modal training from launcher.py."""
+    print(f"Starting Modal training job ({num_gpus} GPUs)...")
+    with app.run():
+        train_on_modal_multigpu.remote(extra_args, num_gpus)
+    print("Modal multi-GPU training job completed!")
 
 
 def sync_trackio_from_modal(project: str = "denoising-zoo") -> None:
@@ -430,7 +495,8 @@ def _print_usage():
     print("  sync [project]    Sync trackio data to local (default: denoising-zoo)")
     print("  ckpts             List checkpoints in Modal volume")
     print("  download <path>   Download checkpoint from Modal (e.g., unet/last.pt)")
-    print("  <hydra args>      Run training on Modal with given arguments")
+    print("  multigpu <args>   Run multi-GPU (2x A100) training on Modal")
+    print("  <hydra args>      Run single-GPU training on Modal with given arguments")
 
 
 if __name__ == "__main__":
@@ -469,6 +535,14 @@ if __name__ == "__main__":
         remote_path = sys.argv[2]
         local_path = sys.argv[3] if len(sys.argv) > 3 else None
         download_checkpoint_from_modal(remote_path, local_path)
+    elif len(sys.argv) > 1 and sys.argv[1] == "multigpu":
+        # Multi-GPU training: python scripts/modal_app.py multigpu <hydra args>
+        if len(sys.argv) < 3:
+            print("Usage: python scripts/modal_app.py multigpu <hydra args>")
+            print("  Runs training on 2x A100 GPUs using DDP")
+            sys.exit(1)
+        extra_args = sys.argv[2:]
+        run_modal_training_multigpu(extra_args, num_gpus=2)
     elif len(sys.argv) > 1 and sys.argv[1] in ("help", "-h", "--help"):
         _print_usage()
     elif len(sys.argv) == 1:
