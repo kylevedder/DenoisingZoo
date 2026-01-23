@@ -294,6 +294,62 @@ class TestEdgeCases:
         loss.backward()
 
 
+class TestFullBatchJVPMode:
+    """Test the full_batch_jvp mode that enables CUDA graph capture."""
+
+    def test_full_batch_jvp_matches_selective(self):
+        """Verify full_batch_jvp mode produces same results as selective mode."""
+        from losses.meanflow_loss import MeanFlowLoss
+
+        torch.manual_seed(42)
+        model = SimpleCNN(in_channels=3, hidden_channels=16)
+        model.eval()
+
+        # Create loss functions with different modes
+        loss_fn_selective = MeanFlowLoss(model=model, meanflow_ratio=0.5, weighting_power=0.0)
+        loss_fn_full = MeanFlowLoss(
+            model=model, meanflow_ratio=0.5, weighting_power=0.0, full_batch_jvp=True
+        )
+
+        batch = {
+            "raw_source": torch.randn(8, 3, 8, 8),
+            "raw_target": torch.randn(8, 3, 8, 8),
+        }
+
+        # Run both modes
+        torch.manual_seed(123)
+        loss_selective = loss_fn_selective(batch)
+
+        torch.manual_seed(123)
+        loss_full = loss_fn_full(batch)
+
+        # Losses should be close (not exact due to different code paths)
+        assert torch.allclose(loss_selective, loss_full, rtol=0.01), (
+            f"Selective: {loss_selective.item()}, Full: {loss_full.item()}"
+        )
+
+    def test_full_batch_jvp_gradients_flow(self):
+        """Verify gradients flow correctly in full_batch_jvp mode."""
+        from losses.meanflow_loss import MeanFlowLoss
+
+        torch.manual_seed(42)
+        model = SimpleCNN(in_channels=3, hidden_channels=16)
+        loss_fn = MeanFlowLoss(
+            model=model, meanflow_ratio=1.0, full_batch_jvp=True
+        )
+
+        batch = {
+            "raw_source": torch.randn(4, 3, 8, 8),
+            "raw_target": torch.randn(4, 3, 8, 8),
+        }
+
+        loss = loss_fn(batch)
+        loss.backward()
+
+        grad_norm = sum(p.grad.norm().item() for p in model.parameters() if p.grad is not None)
+        assert grad_norm > 0, "Gradients should flow in full_batch_jvp mode"
+
+
 class TestNumericalRegression:
     """Regression tests to verify optimization doesn't change numerical behavior."""
 

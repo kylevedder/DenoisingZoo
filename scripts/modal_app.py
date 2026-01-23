@@ -243,14 +243,163 @@ def train_on_modal_multigpu(extra_args: list[str], num_gpus: int = 2) -> None:
 @app.function(
     image=image,
     gpu="A100-40GB",
+    timeout=7200,  # 2 hours for FID (50k samples takes a while)
+    volumes={"/data": training_volume},
+)
+def compute_fid_on_modal(
+    checkpoint_path: str,
+    num_samples: int = 50000,
+    use_solver: bool = False,
+    solver_steps: int = 50,
+    batch_size: int = 256,
+) -> dict:
+    """Compute FID score on Modal A100 GPU.
+
+    Args:
+        checkpoint_path: Relative path in /data/ckpts (e.g., "unet/archive/cifar10_ratio0_20ep_epoch_0020.pt")
+        num_samples: Number of samples to generate (default 50000 for CIFAR-10 FID)
+        use_solver: If True, use ODE solver; else use MeanFlow 1-step
+        solver_steps: Number of solver steps (only if use_solver=True)
+        batch_size: Batch size for generation
+
+    Returns:
+        Dict with FID score and metadata
+    """
+    import tempfile
+    from pathlib import Path
+
+    import torch
+    from cleanfid import fid
+    from torchvision.utils import save_image
+    from tqdm import tqdm
+
+    app_dir = Path("/root/app")
+    os.chdir(app_dir)
+
+    # Import model and helpers
+    sys.path.insert(0, str(app_dir))
+    from models.unet import UNet
+    from dataloaders.base_dataloaders import make_time_input, make_unified_flow_matching_input
+    from solvers.euler_solver import EulerSolver
+
+    device = torch.device("cuda")
+    print(f"Using device: {device} ({torch.cuda.get_device_name()})")
+
+    # Load checkpoint
+    ckpt_full_path = Path("/data/ckpts") / checkpoint_path
+    if not ckpt_full_path.exists():
+        return {"error": f"Checkpoint not found: {ckpt_full_path}"}
+
+    print(f"Loading checkpoint: {ckpt_full_path}")
+    checkpoint = torch.load(ckpt_full_path, map_location=device, weights_only=False)
+    config = checkpoint.get("config", {})
+    model_config = config.get("model", {})
+
+    # Create model
+    model = UNet(
+        in_channels=model_config.get("in_channels", 3),
+        out_channels=model_config.get("out_channels", 3),
+        base_channels=model_config.get("base_channels", 128),
+        time_channels=model_config.get("time_channels", 2),
+        channel_mult=model_config.get("channel_mult", [1, 2, 2, 2]),
+        num_res_blocks=model_config.get("num_res_blocks", 2),
+        attention_resolutions=model_config.get("attention_resolutions", [16]),
+        dropout=model_config.get("dropout", 0.1),
+        num_heads=model_config.get("num_heads", 4),
+        input_resolution=model_config.get("input_resolution", 32),
+        use_separate_time_embeds=model_config.get("use_separate_time_embeds", True),
+    ).to(device)
+
+    model.load_state_dict(checkpoint["model"])
+    model.eval()
+    print(f"Model loaded from epoch {config.get('epoch', 'unknown')}")
+
+    # Sample shape
+    sample_shape = (
+        model_config.get("in_channels", 3),
+        model_config.get("input_resolution", 32),
+        model_config.get("input_resolution", 32),
+    )
+    print(f"Sample shape: {sample_shape}")
+
+    # Create solver if needed
+    solver = None
+    if use_solver:
+        solver = EulerSolver(model, num_steps=solver_steps)
+
+    # Generate samples to temp directory
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_dir = Path(tmpdir)
+        sample_idx = 0
+
+        method = "solver" if use_solver else "meanflow_1step"
+        print(f"Generating {num_samples} samples using {method}...")
+
+        with torch.no_grad():
+            pbar = tqdm(total=num_samples, desc="Generating")
+            while sample_idx < num_samples:
+                current_batch = min(batch_size, num_samples - sample_idx)
+                noise = torch.randn(current_batch, *sample_shape, device=device)
+
+                if use_solver:
+                    # Solver-based sampling
+                    result = solver.solve(noise)
+                    samples = result.final_state
+                else:
+                    # MeanFlow 1-step: x1 = x0 + v(x0, r=0, t=1)
+                    B = noise.shape[0]
+                    r_tensor = torch.zeros(B, 1, device=device, dtype=noise.dtype)
+                    t_tensor = torch.ones(B, 1, device=device, dtype=noise.dtype)
+                    time_input = make_time_input(t_tensor, r=r_tensor)
+                    unified = make_unified_flow_matching_input(noise, time_input)
+                    v = model(unified)
+                    samples = noise + v
+
+                # Clamp and save
+                samples = samples.clamp(-1, 1)
+                for i in range(current_batch):
+                    img = (samples[i] + 1) / 2  # [-1, 1] -> [0, 1]
+                    save_image(img, output_dir / f"{sample_idx:05d}.png")
+                    sample_idx += 1
+                pbar.update(current_batch)
+            pbar.close()
+
+        # Compute FID
+        print("Computing FID against CIFAR-10 train set...")
+        fid_score = fid.compute_fid(
+            fdir1=str(output_dir),
+            dataset_name="cifar10",
+            dataset_res=32,
+            dataset_split="train",
+            mode="clean",
+            device=device,
+            verbose=True,
+        )
+
+    print(f"\nFID Score ({method}): {fid_score:.2f}")
+
+    return {
+        "fid": fid_score,
+        "checkpoint": checkpoint_path,
+        "num_samples": num_samples,
+        "method": method,
+        "solver_steps": solver_steps if use_solver else None,
+        "epoch": config.get("epoch", "unknown"),
+    }
+
+
+@app.function(
+    image=image,
+    gpu="A100-40GB",
     timeout=3600,  # 1 hour max for benchmarks
     volumes={"/data": training_volume},
 )
-def run_benchmark(script_name: str) -> str:
+def run_benchmark(script_name: str, script_args: str = "") -> str:
     """Run a benchmark script on Modal with NVIDIA GPU.
 
     Args:
         script_name: Name of the script in scripts/ directory (e.g., "benchmark_jvp_baseline.py")
+        script_args: Additional arguments to pass to the script (e.g., "--dtype bfloat16")
 
     Returns:
         Output from the benchmark script
@@ -272,10 +421,16 @@ def run_benchmark(script_name: str) -> str:
     if not script_path.exists():
         raise FileNotFoundError(f"Script not found: {script_path}")
 
+    # Set PYTHONPATH so imports work
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(app_dir)
+
     cmd = ["python", str(script_path)]
+    if script_args:
+        cmd.extend(script_args.split())
     print(f"Running benchmark: {' '.join(cmd)}")
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env)
 
     output = result.stdout
     if result.stderr:
@@ -546,6 +701,39 @@ def _merge_trackio_dbs(local_path: Path, remote_bytes: bytes) -> None:
         Path(remote_path).unlink()
 
 
+def run_fid_evaluation(
+    checkpoint_path: str,
+    num_samples: int = 50000,
+    use_solver: bool = False,
+    solver_steps: int = 50,
+) -> dict:
+    """Run FID evaluation on Modal and return results."""
+    print(f"Computing FID for checkpoint: {checkpoint_path}")
+    print(f"  num_samples: {num_samples}")
+    print(f"  method: {'solver' if use_solver else 'meanflow_1step'}")
+    if use_solver:
+        print(f"  solver_steps: {solver_steps}")
+
+    with app.run():
+        result = compute_fid_on_modal.remote(
+            checkpoint_path=checkpoint_path,
+            num_samples=num_samples,
+            use_solver=use_solver,
+            solver_steps=solver_steps,
+        )
+
+    if "error" in result:
+        print(f"Error: {result['error']}")
+    else:
+        print(f"\nResults:")
+        print(f"  FID: {result['fid']:.2f}")
+        print(f"  Checkpoint: {result['checkpoint']}")
+        print(f"  Epoch: {result['epoch']}")
+        print(f"  Method: {result['method']}")
+
+    return result
+
+
 def _print_usage():
     print("Usage: python scripts/modal_app.py <command> [args]")
     print()
@@ -556,6 +744,7 @@ def _print_usage():
     print("  download <path>   Download checkpoint from Modal (e.g., unet/last.pt)")
     print("  multigpu <args>   Run multi-GPU (2x A100) training on Modal")
     print("  benchmark <script> Run a benchmark script on Modal A100")
+    print("  fid <ckpt> [--samples N] [--solver] [--steps N]  Compute FID on Modal")
     print("  <hydra args>      Run single-GPU training on Modal with given arguments")
 
 
@@ -604,18 +793,47 @@ if __name__ == "__main__":
         extra_args = sys.argv[2:]
         run_modal_training_multigpu(extra_args, num_gpus=2)
     elif len(sys.argv) > 1 and sys.argv[1] == "benchmark":
-        # Run benchmark script: python scripts/modal_app.py benchmark <script_name>
+        # Run benchmark script: python scripts/modal_app.py benchmark <script_name> [script_args...]
         if len(sys.argv) < 3:
-            print("Usage: python scripts/modal_app.py benchmark <script_name>")
+            print("Usage: python scripts/modal_app.py benchmark <script_name> [script_args...]")
             print("  script_name: Name of script in scripts/ (e.g., benchmark_jvp_baseline.py)")
+            print("  script_args: Additional args to pass to script (e.g., --dtype bfloat16)")
             sys.exit(1)
         script_name = sys.argv[2]
-        print(f"Running benchmark script: {script_name}")
+        script_args = " ".join(sys.argv[3:]) if len(sys.argv) > 3 else ""
+        print(f"Running benchmark script: {script_name} {script_args}")
         with app.run():
-            output = run_benchmark.remote(script_name)
+            output = run_benchmark.remote(script_name, script_args)
             print("\n" + "="*60)
             print("BENCHMARK COMPLETE")
             print("="*60)
+    elif len(sys.argv) > 1 and sys.argv[1] == "fid":
+        # FID evaluation: python scripts/modal_app.py fid <checkpoint> [--samples N] [--solver] [--steps N]
+        if len(sys.argv) < 3:
+            print("Usage: python scripts/modal_app.py fid <checkpoint> [--samples N] [--solver] [--steps N]")
+            print("  checkpoint: Path in Modal volume (e.g., unet/archive/cifar10_ratio0_20ep_epoch_0020.pt)")
+            print("  --samples N: Number of samples (default: 50000)")
+            print("  --solver: Use ODE solver instead of MeanFlow 1-step")
+            print("  --steps N: Solver steps (default: 50, only with --solver)")
+            sys.exit(1)
+        checkpoint = sys.argv[2]
+        num_samples = 50000
+        use_solver = False
+        solver_steps = 50
+        i = 3
+        while i < len(sys.argv):
+            if sys.argv[i] == "--samples" and i + 1 < len(sys.argv):
+                num_samples = int(sys.argv[i + 1])
+                i += 2
+            elif sys.argv[i] == "--solver":
+                use_solver = True
+                i += 1
+            elif sys.argv[i] == "--steps" and i + 1 < len(sys.argv):
+                solver_steps = int(sys.argv[i + 1])
+                i += 2
+            else:
+                i += 1
+        run_fid_evaluation(checkpoint, num_samples, use_solver, solver_steps)
     elif len(sys.argv) > 1 and sys.argv[1] in ("help", "-h", "--help"):
         _print_usage()
     elif len(sys.argv) == 1:

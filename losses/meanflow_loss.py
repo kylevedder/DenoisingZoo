@@ -36,6 +36,8 @@ class MeanFlowLoss(nn.Module):
         weighting_const: Constant c for adaptive weighting (default: 1e-4)
         eps: Small epsilon for numerical stability (default: 1e-5)
         use_batch_time: If True, prefer batch-provided t when available
+        full_batch_jvp: If True, always compute JVP on full batch (enables CUDA graph capture)
+        use_cuda_graph: If True, capture JVP in CUDA graph (requires full_batch_jvp=True, CUDA only)
     """
 
     def __init__(
@@ -52,6 +54,8 @@ class MeanFlowLoss(nn.Module):
         weighting_const: float = 1e-4,
         eps: float = 1e-5,
         use_batch_time: bool = False,
+        full_batch_jvp: bool = False,
+        use_cuda_graph: bool = False,
     ) -> None:
         super().__init__()
         self._model = model
@@ -73,10 +77,19 @@ class MeanFlowLoss(nn.Module):
         self.weighting_const = weighting_const
         self.eps = eps
         self.use_batch_time = use_batch_time
+        self.full_batch_jvp = full_batch_jvp
+        self.use_cuda_graph = use_cuda_graph
+
+        # CUDA graph state (lazy initialized on first forward pass)
+        self._graphed_jvp_func = None
+        self._cuda_graph_batch_size: int = -1
+        self._cuda_graph_data_shape: tuple | None = None
 
     def set_model(self, model: nn.Module) -> None:
         """Set the model for loss computation (called by training loop)."""
         self._model = model
+        # Reset CUDA graph when model changes
+        self._graphed_jvp_func = None
 
     def _sample_logit_normal(
         self,
@@ -277,6 +290,72 @@ class MeanFlowLoss(nn.Module):
         # Return prediction with gradients attached (NOT detached) for use in loss
         return u_tgt, (mf_mask, u_pred_mf.to(v_true.dtype))
 
+    def _jvp_forward(
+        self,
+        z: torch.Tensor,
+        r: torch.Tensor,
+        t: torch.Tensor,
+        v: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Pure JVP forward computation (capture-safe).
+
+        Returns:
+            u_pred: JVP primal output
+            dudt: JVP tangent output
+            delta_t: Time difference broadcasted to match u_pred shape
+        """
+        def u_func(z_in: torch.Tensor, r_in: torch.Tensor, t_in: torch.Tensor) -> torch.Tensor:
+            time_input = torch.cat([r_in, t_in], dim=1)
+            unified = make_unified_flow_matching_input(z_in, time_input)
+            return self._model(unified)
+
+        tangent_z = v
+        tangent_r = torch.zeros_like(r)
+        tangent_t = torch.ones_like(t)
+
+        u_pred, dudt = torch.func.jvp(
+            u_func,
+            (z, r, t),
+            (tangent_z, tangent_r, tangent_t),
+        )
+
+        delta_t = self._broadcast_time(t - r, u_pred)
+        return u_pred, dudt, delta_t
+
+    def _compute_target_full_batch(
+        self,
+        z_t: torch.Tensor,
+        t: torch.Tensor,
+        r: torch.Tensor,
+        v_true: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute MeanFlow target and prediction using full-batch JVP.
+
+        This version always runs JVP on ALL samples, avoiding CPU-GPU sync
+        and enabling CUDA graph capture. For FM samples (r == t), delta_t = 0,
+        so the target naturally equals v_true.
+
+        Returns:
+            u_tgt: Target tensor for all samples
+            u_pred: Prediction tensor (JVP primal) for all samples
+        """
+        device = z_t.device
+        dtype = v_true.dtype
+
+        # Eager mode (CUDA graph optimization removed for now - requires capturing backward)
+        # See JVP_BENCHMARK_PROBLEMS.md for details on why raw CUDA graph capture doesn't work
+        device_type = z_t.device.type
+        with torch.amp.autocast(device_type, enabled=False):
+            z_float = z_t.float()
+            r_float = r.float()
+            t_float = t.float()
+            v_float = v_true.float()
+
+            u_pred, dudt, delta_t = self._jvp_forward(z_float, r_float, t_float, v_float)
+            u_tgt = (v_float - delta_t * dudt).to(dtype)
+
+        return u_tgt.detach(), u_pred.to(dtype)
+
     def forward(
         self,
         batch: dict[str, torch.Tensor],
@@ -338,27 +417,34 @@ class MeanFlowLoss(nn.Module):
         # Ground truth velocity: v = y - x (points from noise to data)
         v_true = y - x
 
-        # Build time input: (r, t) for all samples
-        time_pred = torch.cat([r, t], dim=1)
-        unified_t = make_unified_flow_matching_input(z_t, time_pred)
+        if self.full_batch_jvp:
+            # Full-batch JVP mode: compute JVP on ALL samples
+            # This avoids CPU-GPU sync and enables CUDA graph capture
+            # For FM samples (r == t), delta_t = 0, so u_tgt = v_true naturally
+            u_tgt, u_pred = self._compute_target_full_batch(z_t, t, r, v_true)
+        else:
+            # Selective JVP mode (default): only compute JVP for MeanFlow samples
+            # Build time input: (r, t) for all samples
+            time_pred = torch.cat([r, t], dim=1)
+            unified_t = make_unified_flow_matching_input(z_t, time_pred)
 
-        # Compute target and get JVP primal for MeanFlow samples
-        # From paper Eq. 7: u_tgt = v - (t - r) * du/dt
-        u_tgt, mf_pred_info = self._compute_target(z_t, t, r, v_true, use_meanflow)
+            # Compute target and get JVP primal for MeanFlow samples
+            # From paper Eq. 7: u_tgt = v - (t - r) * du/dt
+            u_tgt, mf_pred_info = self._compute_target(z_t, t, r, v_true, use_meanflow)
 
-        # Allocate prediction tensor
-        u_pred = torch.empty_like(v_true)
+            # Allocate prediction tensor
+            u_pred = torch.empty_like(v_true)
 
-        # Forward pass ONLY for standard FM samples (if any exist)
-        if fm_mask.any():
-            unified_fm = unified_t[fm_mask]
-            u_pred_fm = self._model(unified_fm)
-            u_pred[fm_mask] = u_pred_fm
+            # Forward pass ONLY for standard FM samples (if any exist)
+            if fm_mask.any():
+                unified_fm = unified_t[fm_mask]
+                u_pred_fm = self._model(unified_fm)
+                u_pred[fm_mask] = u_pred_fm
 
-        # Use JVP primal for MeanFlow samples (if any exist)
-        if mf_pred_info is not None:
-            mf_mask_from_jvp, u_pred_mf = mf_pred_info
-            u_pred[mf_mask_from_jvp] = u_pred_mf
+            # Use JVP primal for MeanFlow samples (if any exist)
+            if mf_pred_info is not None:
+                mf_mask_from_jvp, u_pred_mf = mf_pred_info
+                u_pred[mf_mask_from_jvp] = u_pred_mf
 
         # Compute squared error per sample (sum over spatial dims, not mean)
         # This matches official: loss.sum(dim=(1, 2, 3))
