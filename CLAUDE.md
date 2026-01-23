@@ -86,35 +86,90 @@ def process(model):
 ### Project Hygiene
 - Do not create `__init__.py` files unless explicitly asked
 
-## Mathematical Reasoning and Paper Validation
+## AI-Assisted Verification (Codex + Gemini)
 
-**Use Codex for math-heavy tasks.** When working on mathematical formulas, loss function derivations, or translating paper equations into code, invoke the Codex subagent (OpenAI Codex 5.2 High Reasoning) for validation:
+**CRITICAL: Before declaring any plan or code change complete, get verification from both Codex and Gemini.**
+
+Two CLI tools are available for external validation:
+- **Codex** (`codex`) - OpenAI Codex 5.2 High Reasoning, best for mathematical derivations and formal verification
+- **Gemini** (`gemini`) - Google Gemini 3 with 1M context, best for architectural review and broad code understanding
+
+### Required Verification Workflow
+
+**For all non-trivial changes:**
+1. Write initial implementation or plan
+2. Run **Codex** for mathematical/logical correctness
+3. Run **Gemini** for architectural review and edge cases
+4. Address feedback from both before declaring done
+5. If either raises concerns, iterate and re-verify
+
+### When to Use Codex
 
 ```bash
-# Invoke Codex to sanity-check mathematical derivations
+# Mathematical derivations and paper implementations
 codex "Review this MeanFlow loss implementation against Equation 7 from the paper: [paste code]"
 
-# Validate gradient computations
+# Gradient/JVP/VJP verification
 codex "Verify the JVP computation in this loss function matches the chain rule derivation"
 
-# Cross-check paper-to-code translations
+# Paper-to-code translation
 codex "Does this PyTorch implementation correctly implement the velocity field from Section 3.2?"
 ```
 
-**When to use Codex:**
-- Implementing loss functions from paper equations
-- Verifying gradient/JVP/VJP computations
-- Translating mathematical notation (e.g., expectations, integrals) to code
-- Debugging numerical instabilities that may stem from formula errors
-- Sanity-checking normalization constants, scaling factors, and boundary conditions
+**Codex strengths:**
+- Loss functions from paper equations
+- Gradient computations and automatic differentiation
+- Mathematical notation → code translation
+- Numerical stability analysis
+- Normalization constants and boundary conditions
 
-**Workflow:**
-1. Write initial implementation based on paper
-2. Run `codex` with the relevant paper section and your code
-3. Review Codex's analysis for discrepancies
-4. Fix any identified issues before testing
+### When to Use Gemini
+
+```bash
+# Architectural review
+gemini "Review this training loop refactor for correctness and edge cases"
+
+# Plan validation before implementation
+gemini "Here's my plan to add multi-GPU support. Review for issues: [paste plan]"
+
+# Code review with full context
+gemini "Review these changes to the dataloader. Are there any bugs or missing cases?"
+
+# Integration concerns
+gemini "I'm changing the checkpoint format. What backwards compatibility issues might arise?"
+```
+
+**Gemini strengths:**
+- Architectural decisions and design review
+- Large codebase understanding (1M context)
+- Edge case identification
+- API design and interface review
+- Integration and compatibility concerns
+
+### Sign-off Checklist
+
+Before declaring a task complete:
+- [ ] Codex reviewed any mathematical/algorithmic changes
+- [ ] Gemini reviewed the overall approach and edge cases
+- [ ] Both tools' feedback has been addressed
+- [ ] If disagreements exist between tools, investigate and resolve
 
 ## Commands
+
+### Git Hooks
+
+Pre-commit hooks run unit tests before each commit. Install with:
+
+```bash
+./scripts/setup-hooks.sh
+```
+
+This installs `hooks/pre-commit` to `.git/hooks/`. The hook:
+- Runs all unit tests via pytest
+- Blocks commit if any test fails
+- Can be skipped with `git commit --no-verify` (use sparingly)
+
+To uninstall: `rm .git/hooks/pre-commit`
 
 ### Training
 

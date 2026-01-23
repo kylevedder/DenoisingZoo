@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#
+# Pre-commit hook: runs unit tests and blocks commit if they fail.
+#
+# Install with: ./scripts/setup-hooks.sh
+#
+
+set -e
+
+echo "Running pre-commit checks..."
+
+# Get the repo root
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+# Activate venv if it exists
+if [[ -f ".venv/bin/activate" ]]; then
+    source .venv/bin/activate
+fi
+
+# Run tests
+echo ""
+echo "Running unit tests..."
+if python -m pytest tests/ -q --tb=short; then
+    echo ""
+    echo "All tests passed."
+else
+    echo ""
+    echo "Tests failed. Commit aborted."
+    echo "Fix the failing tests or use 'git commit --no-verify' to skip."
+    exit 1
+fi
+
+echo ""
+echo "Pre-commit checks passed."
