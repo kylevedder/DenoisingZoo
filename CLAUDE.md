@@ -113,23 +113,35 @@ Both tools serve the same purpose: verifying math, code correctness, and design 
 
 The more context you provide, the more effective their verification will be.
 
+### Invocation
+
+**Codex** requires non-interactive mode via `codex exec` with stdin:
+```bash
+echo "Your prompt here" | codex exec
+```
+
+**Gemini** uses positional arguments (ignore the punycode deprecation warning):
+```bash
+gemini "Your prompt here"
+```
+
 ### Example Prompts
 
 ```bash
 # Mathematical derivations and paper implementations
-codex "Review this MeanFlow loss implementation against Equation 7 from the paper: [paste code]"
+echo "Review this MeanFlow loss implementation against Equation 7 from the paper: [paste code]" | codex exec
 gemini "Review this MeanFlow loss implementation against Equation 7 from the paper: [paste code]"
 
 # Gradient/JVP/VJP verification
-codex "Verify the JVP computation in this loss function matches the chain rule derivation"
+echo "Verify the JVP computation in this loss function matches the chain rule derivation" | codex exec
 gemini "Verify the JVP computation in this loss function matches the chain rule derivation"
 
 # Architectural review
-codex "Review this training loop refactor for correctness and edge cases"
+echo "Review this training loop refactor for correctness and edge cases" | codex exec
 gemini "Review this training loop refactor for correctness and edge cases"
 
 # Code review
-codex "Review these changes to the dataloader. Are there any bugs or missing cases?"
+echo "Review these changes to the dataloader. Are there any bugs or missing cases?" | codex exec
 gemini "Review these changes to the dataloader. Are there any bugs or missing cases?"
 ```
 
