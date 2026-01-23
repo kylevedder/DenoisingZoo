@@ -67,6 +67,21 @@ Enable `torch.compile` for kernel fusion (may improve GPU utilization):
 python launcher.py run_name=exp compile=true
 ```
 
+### Mixed Precision (BF16)
+
+BF16 mixed precision is recommended for MeanFlow experiments and provides ~2x memory reduction with minimal precision loss:
+
+```bash
+python launcher.py run_name=exp precision=bf16 loss=meanflow
+```
+
+Precision options:
+- `fp32` - Full precision (default)
+- `bf16` - BFloat16 mixed precision (recommended for MeanFlow on CUDA/MPS)
+- `fp16` - Float16 with GradScaler (CUDA only)
+
+BF16 works on CUDA (Ampere+ GPUs), MPS (Apple Silicon), and CPU. The JVP computation in MeanFlow loss automatically runs in fp32 for numerical stability.
+
 Checkpoints are saved at `outputs/ckpts/<arch>/last.pt`.
 
 ## Modal (Remote GPU)
