@@ -10,7 +10,8 @@ Usage:
     python scripts/benchmark_meanflow_loss.py
     python scripts/benchmark_meanflow_loss.py --device cuda --batch-size 64
     python scripts/benchmark_meanflow_loss.py --model unet
-    python scripts/benchmark_meanflow_loss.py --compile  # Test with torch.compile
+    python scripts/benchmark_meanflow_loss.py --compile  # Test with torch.compile (model only)
+    python scripts/benchmark_meanflow_loss.py --compile-loss --compile-mode reduce-overhead
 """
 
 from __future__ import annotations
@@ -33,9 +34,11 @@ class BenchmarkResult:
     mean_ms: float
     std_ms: float
     n_runs: int
+    first_ms: float | None = None
 
     def __str__(self) -> str:
-        return f"{self.name}: {self.mean_ms:.3f} ± {self.std_ms:.3f} ms"
+        first = f" (first {self.first_ms:.0f} ms)" if self.first_ms is not None else ""
+        return f"{self.name}: {self.mean_ms:.3f} ± {self.std_ms:.3f} ms{first}"
 
 
 def sync_device(device: torch.device) -> None:
@@ -52,8 +55,18 @@ def benchmark_fn(
     warmup: int = 10,
     n_runs: int = 100,
     name: str = "unnamed",
+    measure_first: bool = False,
 ) -> BenchmarkResult:
     """Benchmark a function with proper warmup and synchronization."""
+    first_ms = None
+    if measure_first:
+        sync_device(device)
+        start = time.perf_counter()
+        fn()
+        sync_device(device)
+        end = time.perf_counter()
+        first_ms = (end - start) * 1000
+
     # Warmup
     for _ in range(warmup):
         fn()
@@ -75,11 +88,12 @@ def benchmark_fn(
         mean_ms=times_t.mean().item(),
         std_ms=times_t.std().item(),
         n_runs=n_runs,
+        first_ms=first_ms,
     )
 
 
 def create_unet_model(
-    device: torch.device, compile_model: bool = False
+    device: torch.device, compile_model: bool = False, compile_mode: str = "default"
 ) -> nn.Module:
     """Create UNet model for benchmarking.
 
@@ -97,7 +111,7 @@ def create_unet_model(
     )
     model = model.to(device)  # Keep in fp32, use autocast for mixed precision
     if compile_model:
-        model = torch.compile(model)
+        model = torch.compile(model, mode=compile_mode)
     return model
 
 
@@ -123,6 +137,8 @@ def run_unet_benchmarks(
     n_runs: int,
     warmup: int,
     compile_model: bool = False,
+    compile_loss: bool = False,
+    compile_mode: str = "default",
 ) -> list[BenchmarkResult]:
     """Run benchmarks for UNet model using actual MeanFlowLoss class.
 
@@ -136,7 +152,7 @@ def run_unet_benchmarks(
     results: list[BenchmarkResult] = []
 
     # Model stays in fp32; use autocast for mixed precision
-    model = create_unet_model(device, compile_model)
+    model = create_unet_model(device, compile_model, compile_mode)
     img_size = 32
 
     # Determine if we need autocast (for bf16/fp16)
@@ -242,9 +258,49 @@ def run_unet_benchmarks(
         name="5b. MeanFlowLoss 100% (full_batch_jvp)"
     ))
 
-    # Note: CUDA graph integration for full loss function is complex because
-    # it requires capturing the backward pass. See JVP_BENCHMARK_PROBLEMS.md.
-    # The pure JVP benchmark (7. Pure JVP CUDA graph) shows the potential.
+    # --- Benchmark 5c: MeanFlowLoss 100% with hybrid CUDA graph mode (CUDA only) ---
+    if device.type == "cuda":
+        loss_fn_cuda_graph = MeanFlowLoss(
+            model=model, meanflow_ratio=1.0, full_batch_jvp=True, use_cuda_graph=True
+        )
+
+        def meanflow_loss_cuda_graph():
+            model.zero_grad()
+            with torch.autocast(device.type, dtype=autocast_dtype, enabled=use_autocast):
+                loss = loss_fn_cuda_graph(batch, device=device)
+            loss.backward()
+            return loss
+
+        results.append(benchmark_fn(
+            meanflow_loss_cuda_graph, device, warmup=warmup, n_runs=n_runs,
+            name="5c. MeanFlowLoss 100% (hybrid CUDA graph)"
+        ))
+
+    # --- Benchmark 5d: MeanFlowLoss 100% compiled loss (wrap entire loss forward) ---
+    if compile_loss:
+        torch._dynamo.reset()
+        loss_fn_compiled = MeanFlowLoss(
+            model=model, meanflow_ratio=1.0, full_batch_jvp=True
+        )
+
+        def loss_forward(x_in: torch.Tensor, y_in: torch.Tensor) -> torch.Tensor:
+            batch_in = {"raw_source": x_in, "raw_target": y_in}
+            with torch.autocast(device.type, dtype=autocast_dtype, enabled=use_autocast):
+                return loss_fn_compiled(batch_in, device=device)
+
+        compiled_loss_forward = torch.compile(loss_forward, mode=compile_mode)
+
+        def meanflow_loss_compiled():
+            model.zero_grad()
+            loss = compiled_loss_forward(x, y)
+            loss.backward()
+            return loss
+
+        results.append(benchmark_fn(
+            meanflow_loss_compiled, device, warmup=warmup, n_runs=n_runs,
+            name=f"5d. MeanFlowLoss 100% (compiled loss, mode={compile_mode})",
+            measure_first=True,
+        ))
 
     # --- Benchmark 6: Isolate JVP cost via _compute_target ---
     # Call the internal method directly to measure JVP overhead
@@ -317,6 +373,44 @@ def run_unet_benchmarks(
             print(f"\n  CUDA graph capture failed: {e}")
             print("  Skipping CUDA graph benchmark.")
 
+        # --- Benchmark 8: Hybrid approach - graphed JVP (detached) + forward (fwd+bwd) ---
+        # Theory: CUDA graphs can't capture backward, but we can:
+        # 1. Use graphed JVP to compute target (detached)
+        # 2. Run separate forward pass for prediction (with gradients)
+        # Total: ~52ms (graphed JVP) + ~45ms (fwd+bwd) = ~97ms vs 145ms current
+        try:
+            # Static buffers for target computation
+            static_delta_t = (static_t - static_r).view(-1, 1, 1, 1)
+
+            def hybrid_meanflow_loss():
+                model.zero_grad()
+                with torch.autocast(device.type, dtype=autocast_dtype, enabled=use_autocast):
+                    # Step 1: Use graphed JVP for target (detached, no gradients)
+                    static_z.copy_(z_t_jvp.float())
+                    static_r.copy_(r_jvp.float())
+                    static_t.copy_(t_jvp.float())
+                    static_tang_z.copy_(v_true.float())
+                    g.replay()
+                    # Compute target: u_tgt = v - delta_t * dudt (all detached)
+                    u_tgt = (v_true.float() - static_delta_t * static_tangent).to(dtype).detach()
+
+                    # Step 2: Separate forward pass for prediction (with gradients)
+                    time_pred = torch.cat([r_jvp, t_jvp], dim=1)
+                    unified = make_unified_flow_matching_input(z_t_jvp, time_pred)
+                    u_pred = model(unified)
+
+                    # Step 3: Compute loss
+                    loss = F.mse_loss(u_pred, u_tgt)
+                loss.backward()
+                return loss
+
+            results.append(benchmark_fn(
+                hybrid_meanflow_loss, device, warmup=warmup, n_runs=n_runs,
+                name="8. Hybrid: graphed JVP (target) + forward (pred)"
+            ))
+        except RuntimeError as e:
+            print(f"\n  Hybrid approach failed: {e}")
+
     return results
 
 
@@ -351,8 +445,9 @@ def print_results(results: list[BenchmarkResult], title: str) -> None:
         print(f"    25% ratio (paper):   {overhead_25:+.1f}% overhead (paper claims ~16%)")
         print(f"    100% ratio (all):    {overhead_100:+.1f}% overhead")
 
-        if len(results) >= 6:
-            jvp_only = results[5].mean_ms
+        jvp_result = next((r for r in results if r.name.startswith("6. _compute_target")), None)
+        if jvp_result is not None:
+            jvp_only = jvp_result.mean_ms
             print(f"\n  JVP Cost Analysis:")
             print(f"    _compute_target (JVP): {jvp_only:.3f} ms")
             print(f"    JVP as % of forward:   {100*jvp_only/forward:.1f}%")
@@ -376,7 +471,10 @@ def main():
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--n-runs", type=int, default=100)
     parser.add_argument("--warmup", type=int, default=10)
-    parser.add_argument("--compile", action="store_true", help="Use torch.compile")
+    parser.add_argument("--compile", action="store_true", help="Use torch.compile on model")
+    parser.add_argument("--compile-loss", action="store_true", help="Use torch.compile on loss forward")
+    parser.add_argument("--compile-mode", type=str, default="default")
+    parser.add_argument("--log-cudagraphs", action="store_true", help="Enable cudagraph logging")
     args = parser.parse_args()
 
     device_str = args.device if args.device else get_default_device()
@@ -403,8 +501,14 @@ def main():
     print(f"  N runs: {args.n_runs}")
     print(f"  Warmup: {args.warmup}")
     print(f"  torch.compile: {args.compile}")
+    print(f"  compile_loss: {args.compile_loss}")
+    print(f"  compile_mode: {args.compile_mode}")
     if device.type == "cuda":
         print(f"  TF32 enabled: True")
+
+    if args.log_cudagraphs:
+        import logging
+        torch._logging.set_logs(inductor=logging.INFO, cudagraphs=True)
 
     results = run_unet_benchmarks(
         batch_size=args.batch_size,
@@ -413,6 +517,8 @@ def main():
         n_runs=args.n_runs,
         warmup=args.warmup,
         compile_model=args.compile,
+        compile_loss=args.compile_loss,
+        compile_mode=args.compile_mode,
     )
     print_results(results, "UNet Benchmark (CIFAR-10 scale, ~51M params)")
 

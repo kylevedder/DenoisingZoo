@@ -350,6 +350,68 @@ class TestFullBatchJVPMode:
         assert grad_norm > 0, "Gradients should flow in full_batch_jvp mode"
 
 
+class TestCUDAGraphMode:
+    """Test the hybrid CUDA graph mode for MeanFlowLoss.
+
+    These tests only run on CUDA devices.
+    """
+
+    def test_cuda_graph_mode_gradients_flow(self):
+        """Verify gradients flow correctly in CUDA graph mode."""
+        import pytest
+        if not torch.cuda.is_available():
+            pytest.skip("CUDA not available")
+
+        from losses.meanflow_loss import MeanFlowLoss
+
+        torch.manual_seed(42)
+        device = torch.device("cuda")
+        model = SimpleCNN(in_channels=3, hidden_channels=16).to(device)
+        loss_fn = MeanFlowLoss(
+            model=model, meanflow_ratio=1.0, full_batch_jvp=True, use_cuda_graph=True
+        )
+
+        batch = {
+            "raw_source": torch.randn(4, 3, 8, 8, device=device),
+            "raw_target": torch.randn(4, 3, 8, 8, device=device),
+        }
+
+        loss = loss_fn(batch)
+        loss.backward()
+
+        grad_norm = sum(p.grad.norm().item() for p in model.parameters() if p.grad is not None)
+        assert grad_norm > 0, "Gradients should flow in CUDA graph mode"
+
+    def test_cuda_graph_mode_multiple_iterations(self):
+        """Verify CUDA graph mode works across multiple iterations."""
+        import pytest
+        if not torch.cuda.is_available():
+            pytest.skip("CUDA not available")
+
+        from losses.meanflow_loss import MeanFlowLoss
+
+        torch.manual_seed(42)
+        device = torch.device("cuda")
+        model = SimpleCNN(in_channels=3, hidden_channels=16).to(device)
+        loss_fn = MeanFlowLoss(
+            model=model, meanflow_ratio=1.0, full_batch_jvp=True, use_cuda_graph=True
+        )
+
+        # Run multiple iterations
+        for i in range(5):
+            batch = {
+                "raw_source": torch.randn(4, 3, 8, 8, device=device),
+                "raw_target": torch.randn(4, 3, 8, 8, device=device),
+            }
+            model.zero_grad()
+            loss = loss_fn(batch)
+            assert not torch.isnan(loss), f"Iteration {i}: loss is NaN"
+            loss.backward()
+
+            grad_norm = sum(p.grad.norm().item() for p in model.parameters() if p.grad is not None)
+            assert grad_norm > 0, f"Iteration {i}: no gradients"
+
+
 class TestNumericalRegression:
     """Regression tests to verify optimization doesn't change numerical behavior."""
 

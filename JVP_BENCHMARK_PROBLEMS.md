@@ -150,6 +150,30 @@ JVP scales sub-linearly with batch size:
 
 Doubling JVP samples only adds ~10% time. This sub-linear scaling means JVP is MORE efficient at larger batches.
 
+### Option A2: torch.compile with reduce-overhead (cudagraph trees) ❌ INCOMPATIBLE (2026-01-23)
+
+Attempted to use `torch.compile(mode='reduce-overhead')` on the entire loss function, which should enable automatic CUDA graph capture via "cudagraph trees":
+
+```bash
+modal run scripts/modal_app.py::run_benchmark --script-name benchmark_meanflow_loss.py \
+  --script-args "--dtype float32 --compile-loss --compile-mode reduce-overhead"
+```
+
+**Result:** Deep Dynamo tracing errors during compilation. `torch.compile` does not support `torch.func.jvp` transforms:
+
+```
+torch._dynamo.exc.Unsupported: call_function HigherOrderOperator in skip files
+```
+
+**Conclusion:** `torch.compile` (any mode) is fundamentally incompatible with `torch.func.jvp`. The JVP transform operates at a different level than torch.compile's tracing, and Dynamo cannot trace through functional transforms. This rules out automatic cudagraph trees for MeanFlow loss.
+
+**Alternatives to investigate:**
+- `torch.cuda.make_graphed_callables` - PyTorch's wrapper for graphing callables with autograd support
+- Manual CUDA graph capture of forward + backward + optimizer together
+- JAX for JVP computation (cross-framework complexity)
+
+---
+
 ### Option F: CUDA Graphs ✓ **MAJOR IMPROVEMENT** (2026-01-23)
 
 **BREAKTHROUGH:** CUDA graph capture reduces JVP overhead by **56%**!
@@ -199,8 +223,73 @@ This brings JVP cost from 7.6x forward to **3.3x forward**, much closer to the t
 
 **To Enable Full CUDA Graph Benefits:**
 - Capture the entire training step (forward + backward + optimizer)
-- Use `torch.compile(mode="reduce-overhead")` which includes cudagraph trees
-- Investigate `torch.cuda.make_graphed_callables` compatibility with `torch.func.jvp`
+- ~~Use `torch.compile(mode="reduce-overhead")` which includes cudagraph trees~~ **BLOCKED** - incompatible with torch.func.jvp
+- ~~Investigate `torch.cuda.make_graphed_callables` compatibility with `torch.func.jvp`~~ **BLOCKED** - see below
+
+### Option G: torch.cuda.make_graphed_callables ❌ INCOMPATIBLE (2026-01-23)
+
+Per Codex and Gemini consultation:
+
+**Key finding:** `make_graphed_callables` does NOT support higher-order differentiation. In MeanFlow loss:
+- JVP is computed w.r.t. inputs (z, r, t)
+- We backprop through JVP primal to get parameter gradients
+- This is **higher-order** differentiation (reverse-mode through forward-mode)
+- `make_graphed_callables` explicitly cannot handle this case
+
+**From PyTorch docs:** "make_graphed_callables does not support higher-order differentiation"
+
+**Our use case:**
+```python
+u_pred, dudt = torch.func.jvp(model, primals, tangents)
+# u_pred has gradients attached - we backprop through it
+loss = MSE(u_pred, target.detach())
+loss.backward()  # Higher-order: reverse-mode through forward-mode
+```
+
+**Potential workarounds:**
+1. **Detach u_pred** - blocks parameter gradients (defeats optimization purpose)
+2. **Custom autograd.Function with jvp()** - provide fused forward-mode rule (very complex)
+3. **Capture entire training step** - graph forward+backward+optimizer together
+4. **Hybrid approach** - see Option H below ✓
+
+### Option H: Hybrid CUDA Graph Mode ✓ **47% SPEEDUP** (2026-01-23)
+
+**BREAKTHROUGH:** Separate CUDA-graphed JVP (for target) from forward pass (for gradients)!
+
+| Approach | Time (ms) | vs Current | vs Standard FM |
+|----------|-----------|------------|----------------|
+| Current (full_batch_jvp) | 172.2 | baseline | +298% |
+| **Hybrid (graphed JVP + fwd)** | **91.2** | **-47%** | +111% |
+| Pure CUDA graph JVP | 52.6 | - | - |
+| Standard FM | 43.3 | - | baseline |
+
+**How it works:**
+1. **Graphed JVP (detached)** - Compute dudt for target using CUDA-graphed JVP (~52ms)
+   - Outputs are fully detached (no backward through JVP)
+   - Target = v - delta_t * dudt (all detached)
+2. **Separate forward pass** - Run model normally for prediction (~43ms fwd+bwd)
+   - Gradients flow through this path for parameter updates
+3. **Total: ~95ms** (vs 172ms current)
+
+**Tradeoff:** This "loses" the JVP primal reuse optimization (model called twice). But CUDA graph speedup more than compensates:
+- Primal reuse saves: 17ms (one forward pass)
+- CUDA graph saves: 107ms (159ms eager → 52ms graphed)
+- Net gain: 90ms faster!
+
+**Implementation status:** ✅ FULLY INTEGRATED into MeanFlowLoss via `use_cuda_graph=True`
+
+**Verified benchmark (2026-01-23):**
+| Mode | Time (ms) | vs Standard FM |
+|------|-----------|----------------|
+| Standard FM MSE | 42.8 | baseline |
+| MeanFlowLoss 100% (selective) | 144.4 | +237% |
+| MeanFlowLoss 100% (full_batch_jvp) | 141.4 | +230% |
+| **MeanFlowLoss 100% (hybrid CUDA graph)** | **91.9** | **+115%** |
+
+**Requirements:**
+- Static batch size (CUDA graphs require fixed shapes)
+- `full_batch_jvp=True` (all samples go through JVP)
+- CUDA device only (no MPS/CPU support)
 
 ---
 
@@ -232,13 +321,25 @@ modal run scripts/modal_app.py::run_benchmark --script-name benchmark_meanflow_l
 
 ### Current Status
 
-| Metric | Before Opt | After JVP Reuse | With CUDA Graphs |
-|--------|------------|-----------------|------------------|
+| Metric | Before Opt | After JVP Reuse | Hybrid CUDA Graph |
+|--------|------------|-----------------|-------------------|
 | JVP cost | 119 ms | 117 ms | **52 ms** |
 | vs Forward | 7.4x | 7.3x | **3.3x** |
-| MeanFlowLoss 100% | 172.8 ms | 145.2 ms | ~80 ms (est) |
+| MeanFlowLoss 100% | 172.8 ms | 144.4 ms | **91.9 ms** |
+| vs Standard FM | +277% | +237% | **+115%** |
 
-CUDA graphs bring JVP cost close to the theoretical 2x overhead. The remaining 3.3x overhead (vs 2x theoretical) is intrinsic compute, not dispatch.
+**Hybrid CUDA graph mode** brings MeanFlow overhead from ~237% to ~115% over standard FM.
+The remaining 3.3x JVP overhead (vs 2x theoretical) is intrinsic compute cost.
+
+**Usage:**
+```python
+loss_fn = MeanFlowLoss(
+    model=model,
+    meanflow_ratio=0.25,  # Paper default
+    full_batch_jvp=True,  # Required for CUDA graphs
+    use_cuda_graph=True,  # Enable 35% speedup
+)
+```
 
 ### Remaining Work
 
@@ -252,17 +353,143 @@ CUDA graphs bring JVP cost close to the theoretical 2x overhead. The remaining 3
 
 1. Use **batch_size=64** with gradient accumulation for effective batch 1024
 2. Use **ratio=0.25** (paper default) - JVP only computed for 25% of samples
-3. **Do NOT use torch.compile** for MeanFlow training (no JVP benefit, compilation overhead)
+3. **Do NOT use torch.compile** for MeanFlow training (incompatible with torch.func.jvp - causes Dynamo errors)
 4. Use **A100/H100** - JVP scales well; MPS is impractical for ratio > 0
 5. **Enable TF32** - marginal benefit for non-JVP parts
 
 ### Path to Paper's 16% Overhead
 
-The paper claims 16% overhead. Our current best (with CUDA graphs) achieves:
-- 52ms JVP vs 16ms forward = **~225% overhead** on the JVP call
-- At 25% ratio: ~25% × 225% = **~56% overhead** on full step (vs paper's 16%)
+The paper claims 16% overhead. Our best (hybrid CUDA graph mode) achieves:
+- MeanFlowLoss 100%: 91.2ms vs Standard FM: 43.3ms = **+111% overhead**
+- At 25% ratio (paper default): ~43ms + 0.25×(91ms-43ms) ≈ **55ms = +28% overhead**
 
-To reach 16%, additional optimizations may be needed:
-- Custom CUDA kernels for forward-mode AD
-- JAX's more optimized JVP implementation
-- Full CUDA graph integration (capture entire loss computation)
+This is close to, but still above, the paper's claimed 16%. Possible explanations:
+1. **Different model architecture** - Paper may use more JVP-efficient ops
+2. **JAX vs PyTorch** - JAX's JVP may be more optimized
+3. **Different hardware** - TPU vs A100 characteristics differ
+4. **Custom kernels** - Paper authors may have custom forward-mode AD
+
+**Next steps to close the gap:**
+- Profile which ops dominate JVP time
+- Investigate custom CUDA kernels for expensive forward-mode ops
+- Consider hybrid JAX/PyTorch approach for JVP computation
+
+---
+
+## Appendix: Alternative Approaches Tested
+
+### Option I: torch.autograd.forward_ad ❌ SLOWER THAN HYBRID (2026-01-23)
+
+`torch.autograd.forward_ad` allows computing both primal (with gradients) and tangent in a single forward pass using dual numbers. This could theoretically eliminate the separate forward pass in our hybrid approach.
+
+**Benchmark results (A100, batch=32):**
+
+| Approach | Time (ms) | Notes |
+|----------|-----------|-------|
+| Baseline (fwd+bwd) | 42.2 | Standard FM |
+| forward_ad single pass (fwd+bwd) | 122.3 | One model call, gets primal+tangent+backward |
+| forward_ad (forward only) | 96.3 | No backward |
+| forward_ad CUDA graph (no bwd) | 55.7 | Graphed forward only |
+| Hybrid (non-graphed JVP + fwd) | 154.3 | Two model calls |
+| **Hybrid (CUDA graphed JVP + fwd)** | **91.9** | Our best approach |
+
+**Key findings:**
+1. **forward_ad single-pass (122ms) beats non-graphed hybrid (154ms)** - fewer model calls wins
+2. **But CUDA graphed hybrid (92ms) is still fastest** - graph capture provides bigger speedup
+3. **forward_ad CUDA graph + backward fails** with "Trying to backward through graph a second time"
+4. **forward_ad CUDA graph (55.7ms) ≈ torch.func.jvp CUDA graph (52ms)** - similar cost
+
+**Conclusion:** forward_ad is a valid alternative to torch.func.jvp with similar performance, but cannot beat our hybrid CUDA graph approach because backward through CUDA graphs doesn't work.
+
+**Code tested:**
+```python
+import torch.autograd.forward_ad as fwAD
+
+with fwAD.dual_level():
+    z_dual = fwAD.make_dual(z_t, v_true)       # tangent = velocity
+    r_dual = fwAD.make_dual(r, torch.zeros_like(r))
+    t_dual = fwAD.make_dual(t, torch.ones_like(t))  # dt/d_param = 1
+    # ... build unified input ...
+    u_dual = model(unified_dual)
+    u_primal, dudt = fwAD.unpack_dual(u_dual)  # Both in one pass!
+```
+
+### Profiling Results: GroupNorm is the Bottleneck (2026-01-23)
+
+Profiled JVP computation to identify which ops dominate the overhead:
+
+| Op | Baseline (ms) | JVP (ms) | Overhead |
+|----|---------------|----------|----------|
+| **native_group_norm** | **1.7** | **22.1** | **13x** |
+| cudnn_convolution | 5.7 | 18.8 | 3.3x |
+| mul | ~0 | 12.8 | huge |
+| add | ~0.6 | 8.0 | 13x |
+| silu | ~0 | 6.2 | huge |
+
+**Total:** Baseline 11.6ms CUDA time → JVP 57.9ms CUDA time = **5x overhead**
+
+**Key finding: GroupNorm accounts for ~40% of JVP overhead!**
+- GroupNorm must recompute running statistics for both primal and tangent
+- The tangent statistics computation is expensive
+- 49 GroupNorm calls × 0.4ms overhead each = ~20ms
+
+**Potential optimizations:**
+1. **Replace GroupNorm with LayerNorm** - LayerNorm has simpler JVP (no running stats)
+2. **Fused GroupNorm JVP kernel** - Custom CUDA kernel for combined primal+tangent
+3. **Reduce group count** - Fewer groups = fewer stat computations
+4. **Skip GroupNorm tangent** - If tangent through norm is negligible, approximate it
+
+### FastJVPGroupNorm Attempt ❌ SLOWER (2026-01-23)
+
+Attempted to implement GroupNorm with frozen statistics (treat mean/var as constants in JVP).
+
+**Result:** Manual Python implementation is **slower** than native JVP overhead!
+- torch.func.jvp (standard): 116ms
+- torch.func.jvp (FastJVPGroupNorm): 151ms - **30% slower**
+
+**Why:** Manual tensor operations in Python (reshape, mean, var, expand) are slower than PyTorch's optimized CUDA kernels, even with the 13x JVP overhead.
+
+**Conclusion:** Proper optimization requires **custom CUDA/Triton kernels** that fuse:
+1. Statistics computation (mean, var)
+2. Normalization (x - mean) / std
+3. Tangent computation (simplified: dx / std when stats frozen)
+
+This is beyond pure Python optimization and would require:
+- Writing Triton kernels for GroupNorm JVP
+- Using xformers/Apex fused norm layers with custom JVP rules
+- Or using JAX/XLA which has better forward-mode AD support
+
+---
+
+## Summary: Optimization Journey
+
+### Starting Point
+- **MeanFlowLoss 100%**: 172.8ms (+277% vs Standard FM)
+- **JVP cost**: 119ms (7.4x forward pass)
+
+### Optimization 1: JVP Primal Reuse (16% speedup)
+- Reuse JVP primal output instead of separate forward pass
+- **Result**: 145.2ms (+217% vs Standard FM)
+
+### Optimization 2: Hybrid CUDA Graph (47% speedup)
+- CUDA graph for JVP (detached) + separate forward (with gradients)
+- **Result**: 91.9ms (+115% vs Standard FM)
+- **Current best production implementation**
+
+### Attempted Optimizations (No Benefit)
+- **torch.compile**: Incompatible with torch.func.jvp
+- **torch.autograd.forward_ad**: Same cost as torch.func.jvp
+- **FastJVPGroupNorm**: Slower than native (needs custom CUDA kernels)
+- **BF16/FP16**: JVP forces FP32 internally
+
+### Final Performance
+
+| Stage | MeanFlowLoss 100% | vs Standard FM |
+|-------|-------------------|----------------|
+| Initial | 172.8ms | +277% |
+| After JVP Reuse | 145.2ms | +237% |
+| **Hybrid CUDA Graph** | **91.9ms** | **+115%** |
+
+**At 25% ratio (paper default):**
+- Estimated overhead: ~29% (vs paper's claimed 16%)
+- Gap likely due to: JAX/XLA optimizations, custom kernels, or different hardware

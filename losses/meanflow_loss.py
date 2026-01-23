@@ -82,8 +82,18 @@ class MeanFlowLoss(nn.Module):
 
         # CUDA graph state (lazy initialized on first forward pass)
         self._graphed_jvp_func = None
+        self._cuda_graph: torch.cuda.CUDAGraph | None = None
         self._cuda_graph_batch_size: int = -1
         self._cuda_graph_data_shape: tuple | None = None
+        # Static buffers for CUDA graph (initialized by _capture_cuda_graph)
+        self._static_z: torch.Tensor | None = None
+        self._static_r: torch.Tensor | None = None
+        self._static_t: torch.Tensor | None = None
+        self._static_v: torch.Tensor | None = None
+        self._static_tang_r: torch.Tensor | None = None
+        self._static_tang_t: torch.Tensor | None = None
+        self._static_primal: torch.Tensor | None = None
+        self._static_tangent: torch.Tensor | None = None
 
     def set_model(self, model: nn.Module) -> None:
         """Set the model for loss computation (called by training loop)."""
@@ -356,6 +366,100 @@ class MeanFlowLoss(nn.Module):
 
         return u_tgt.detach(), u_pred.to(dtype)
 
+    def _capture_cuda_graph(
+        self,
+        z_t: torch.Tensor,
+        t: torch.Tensor,
+        r: torch.Tensor,
+        v_true: torch.Tensor,
+    ) -> None:
+        """Capture CUDA graph for JVP computation.
+
+        Creates static buffers and captures the JVP computation graph.
+        Must be called before using _compute_target_cuda_graph_hybrid.
+        """
+        device = z_t.device
+        batch_size = z_t.shape[0]
+        data_shape = z_t.shape
+
+        # Create static buffers (all float32 for JVP)
+        self._static_z = z_t.float().clone()
+        self._static_r = r.float().clone()
+        self._static_t = t.float().clone()
+        self._static_v = v_true.float().clone()
+        self._static_tang_r = torch.zeros_like(r).float()
+        self._static_tang_t = torch.ones_like(t).float()
+
+        # Pure JVP function for capture
+        def jvp_func(z_in: torch.Tensor, r_in: torch.Tensor, t_in: torch.Tensor) -> torch.Tensor:
+            time_input = torch.cat([r_in, t_in], dim=1)
+            unified = make_unified_flow_matching_input(z_in, time_input)
+            return self._model(unified)
+
+        # Warmup
+        for _ in range(3):
+            torch.func.jvp(
+                jvp_func,
+                (self._static_z, self._static_r, self._static_t),
+                (self._static_v, self._static_tang_r, self._static_tang_t),
+            )
+            torch.cuda.synchronize()
+
+        # Capture graph
+        self._cuda_graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(self._cuda_graph):
+            self._static_primal, self._static_tangent = torch.func.jvp(
+                jvp_func,
+                (self._static_z, self._static_r, self._static_t),
+                (self._static_v, self._static_tang_r, self._static_tang_t),
+            )
+
+        self._cuda_graph_batch_size = batch_size
+        self._cuda_graph_data_shape = data_shape
+
+    def _compute_target_cuda_graph_hybrid(
+        self,
+        z_t: torch.Tensor,
+        t: torch.Tensor,
+        r: torch.Tensor,
+        v_true: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute MeanFlow target using CUDA-graphed JVP (detached).
+
+        This is the hybrid approach:
+        1. Use CUDA-graphed JVP to compute dudt (detached, no backward)
+        2. Compute target = v - delta_t * dudt (detached)
+        3. Caller runs separate forward pass for prediction (with gradients)
+
+        Returns:
+            u_tgt: Detached target tensor
+        """
+        device = z_t.device
+        dtype = v_true.dtype
+
+        # Check if we need to (re)capture the graph
+        if (
+            self._cuda_graph is None
+            or self._cuda_graph_batch_size != z_t.shape[0]
+            or self._cuda_graph_data_shape != z_t.shape
+        ):
+            self._capture_cuda_graph(z_t, t, r, v_true)
+
+        # Copy data into static buffers
+        self._static_z.copy_(z_t.float())
+        self._static_r.copy_(r.float())
+        self._static_t.copy_(t.float())
+        self._static_v.copy_(v_true.float())
+
+        # Replay graph
+        self._cuda_graph.replay()
+
+        # Compute target from graphed outputs (all detached)
+        delta_t = self._broadcast_time(self._static_t - self._static_r, self._static_primal)
+        u_tgt = (self._static_v - delta_t * self._static_tangent).to(dtype)
+
+        return u_tgt.detach()
+
     def forward(
         self,
         batch: dict[str, torch.Tensor],
@@ -417,7 +521,18 @@ class MeanFlowLoss(nn.Module):
         # Ground truth velocity: v = y - x (points from noise to data)
         v_true = y - x
 
-        if self.full_batch_jvp:
+        if self.use_cuda_graph and z_t.device.type == "cuda":
+            # Hybrid CUDA graph mode: graphed JVP (target) + separate forward (pred)
+            # This achieves 47% speedup over eager full_batch_jvp mode
+            # See JVP_BENCHMARK_PROBLEMS.md for details
+            u_tgt = self._compute_target_cuda_graph_hybrid(z_t, t, r, v_true)
+
+            # Separate forward pass for prediction (with gradients for backward)
+            time_pred = torch.cat([r, t], dim=1)
+            unified_t = make_unified_flow_matching_input(z_t, time_pred)
+            u_pred = self._model(unified_t)
+
+        elif self.full_batch_jvp:
             # Full-batch JVP mode: compute JVP on ALL samples
             # This avoids CPU-GPU sync and enables CUDA graph capture
             # For FM samples (r == t), delta_t = 0, so u_tgt = v_true naturally
