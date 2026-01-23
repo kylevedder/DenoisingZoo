@@ -100,7 +100,7 @@ Both tools serve the same purpose: verifying math, code correctness, and design 
 
 **For all non-trivial changes:**
 1. Write initial implementation or plan
-2. Run **both Codex and Gemini** with the same verification prompt
+2. Run **both Codex and Gemini in parallel** with the same verification prompt
 3. Address feedback from both before declaring done
 4. If they disagree, investigate and resolve
 
