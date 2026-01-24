@@ -61,3 +61,6 @@ celeba.tar.gz
 
 # uv
 .uv/
+
+# AI tool working directories
+.codex_tmp/

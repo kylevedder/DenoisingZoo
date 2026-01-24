@@ -398,7 +398,7 @@ def run_benchmark(script_name: str, script_args: str = "") -> str:
     """Run a benchmark script on Modal with NVIDIA GPU.
 
     Args:
-        script_name: Name of the script in scripts/ directory (e.g., "benchmark_jvp_baseline.py")
+        script_name: Name of the script in scripts/ directory (e.g., "benchmark_meanflow_loss.py")
         script_args: Additional arguments to pass to the script (e.g., "--dtype bfloat16")
 
     Returns:
@@ -796,7 +796,7 @@ if __name__ == "__main__":
         # Run benchmark script: python scripts/modal_app.py benchmark <script_name> [script_args...]
         if len(sys.argv) < 3:
             print("Usage: python scripts/modal_app.py benchmark <script_name> [script_args...]")
-            print("  script_name: Name of script in scripts/ (e.g., benchmark_jvp_baseline.py)")
+            print("  script_name: Name of script in scripts/ (e.g., benchmark_meanflow_loss.py)")
             print("  script_args: Additional args to pass to script (e.g., --dtype bfloat16)")
             sys.exit(1)
         script_name = sys.argv[2]

@@ -263,6 +263,33 @@ On CUDA devices, the following optimizations are automatically enabled:
 
 These are enabled automatically when `device=cuda` - no config needed.
 
+### MeanFlow JVP Performance (CUDA)
+
+MeanFlow training requires computing Jacobian-vector products (JVP) which adds overhead compared to standard flow matching. On CUDA, enable hybrid CUDA graph mode for best performance:
+
+```bash
+# Recommended CUDA settings for MeanFlow (add to loss config or command line)
+python launcher.py run_name=exp loss=meanflow loss.full_batch_jvp=true loss.use_cuda_graph=true precision=bf16
+```
+
+**Performance comparison (A100, UNet, batch=64):**
+
+| Mode | Time | vs Standard FM |
+|------|------|----------------|
+| Standard FM (baseline) | 43ms | - |
+| MeanFlow (default selective) | 145ms | +237% |
+| MeanFlow (CUDA graph + BF16) | 81ms | **+72%** |
+| At 25% ratio (paper default) | ~52ms | **~19%** |
+
+**Options:**
+- `full_batch_jvp=true` - Compute JVP for all samples (removes CPU-GPU sync)
+- `use_cuda_graph=true` - Capture JVP in CUDA graph (47% speedup, requires full_batch_jvp)
+
+**Notes:**
+- CUDA graph mode requires static batch sizes
+- MPS does not support CUDA graphs - use default selective mode
+- The ~19% overhead at 25% ratio is close to the paper's claimed 16%
+
 ### Remote Training (Modal)
 ```bash
 modal token new  # one-time auth

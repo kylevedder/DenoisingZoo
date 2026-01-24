@@ -554,12 +554,12 @@ class MeanFlowLoss(nn.Module):
             if fm_mask.any():
                 unified_fm = unified_t[fm_mask]
                 u_pred_fm = self._model(unified_fm)
-                u_pred[fm_mask] = u_pred_fm
+                u_pred[fm_mask] = u_pred_fm.to(u_pred.dtype)
 
             # Use JVP primal for MeanFlow samples (if any exist)
             if mf_pred_info is not None:
                 mf_mask_from_jvp, u_pred_mf = mf_pred_info
-                u_pred[mf_mask_from_jvp] = u_pred_mf
+                u_pred[mf_mask_from_jvp] = u_pred_mf.to(u_pred.dtype)
 
         # Compute squared error per sample (sum over spatial dims, not mean)
         # This matches official: loss.sum(dim=(1, 2, 3))

@@ -82,6 +82,15 @@ Precision options:
 
 BF16 works on CUDA (Ampere+ GPUs), MPS (Apple Silicon), and CPU. The JVP computation in MeanFlow loss automatically runs in fp32 for numerical stability.
 
+### MeanFlow CUDA Optimization
+
+For best performance on CUDA, enable hybrid CUDA graph mode:
+```bash
+python launcher.py run_name=exp loss=meanflow loss.full_batch_jvp=true loss.use_cuda_graph=true precision=bf16
+```
+
+This reduces MeanFlow overhead from ~237% to ~72% vs standard flow matching (at 100% ratio). At the paper's recommended 25% ratio, overhead is ~19%.
+
 Checkpoints are saved at `outputs/ckpts/<arch>/last.pt`.
 
 ## Modal (Remote GPU)

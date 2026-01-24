@@ -129,6 +129,7 @@ class SelfAttention(nn.Module):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = channels // num_heads
+        self.scale = self.head_dim**-0.5
 
         self.norm = GroupNorm32(32, channels)
         self.qkv = nn.Conv2d(channels, channels * 3, 1)
@@ -142,16 +143,21 @@ class SelfAttention(nn.Module):
         qkv = qkv.reshape(B, 3, self.num_heads, self.head_dim, H * W)
         q, k, v = qkv.unbind(1)
 
-        # Scaled dot-product attention
+        # Reshape for attention: (B, heads, seq_len, head_dim)
         q = q.permute(0, 1, 3, 2)  # (B, heads, HW, head_dim)
-        k = k.permute(0, 1, 2, 3)  # (B, heads, head_dim, HW)
+        k = k.permute(0, 1, 3, 2)  # (B, heads, HW, head_dim)
         v = v.permute(0, 1, 3, 2)  # (B, heads, HW, head_dim)
 
-        scale = self.head_dim ** -0.5
-        attn = torch.matmul(q, k) * scale
-        attn = F.softmax(attn, dim=-1)
+        # Use SDPA on CUDA (supports FlashAttention + forward AD), manual on MPS
+        # MPS SDPA doesn't support forward-mode AD (JVP) needed for MeanFlow
+        if x.device.type == "cuda":
+            out = F.scaled_dot_product_attention(q, k, v)  # (B, heads, HW, head_dim)
+        else:
+            # Manual attention for MPS/CPU (supports JVP)
+            attn = torch.matmul(q, k.transpose(-2, -1)) * self.scale
+            attn = F.softmax(attn, dim=-1)
+            out = torch.matmul(attn, v)
 
-        out = torch.matmul(attn, v)  # (B, heads, HW, head_dim)
         out = out.permute(0, 1, 3, 2).reshape(B, C, H, W)
 
         return x + self.proj(out)

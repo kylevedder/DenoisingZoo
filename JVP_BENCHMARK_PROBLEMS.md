@@ -439,25 +439,39 @@ Profiled JVP computation to identify which ops dominate the overhead:
 3. **Reduce group count** - Fewer groups = fewer stat computations
 4. **Skip GroupNorm tangent** - If tangent through norm is negligible, approximate it
 
-### FastJVPGroupNorm Attempt ❌ SLOWER (2026-01-23)
+### FastJVPGroupNorm Attempt ❌ BLOCKED (2026-01-23)
 
 Attempted to implement GroupNorm with frozen statistics (treat mean/var as constants in JVP).
 
-**Result:** Manual Python implementation is **slower** than native JVP overhead!
+**Approach 1: Manual Python implementation** - SLOWER
 - torch.func.jvp (standard): 116ms
 - torch.func.jvp (FastJVPGroupNorm): 151ms - **30% slower**
+- Manual tensor operations in Python are slower than native kernels
 
-**Why:** Manual tensor operations in Python (reshape, mean, var, expand) are slower than PyTorch's optimized CUDA kernels, even with the 13x JVP overhead.
+**Approach 2: Native kernel + custom autograd.Function JVP** - BLOCKED
 
-**Conclusion:** Proper optimization requires **custom CUDA/Triton kernels** that fuse:
-1. Statistics computation (mean, var)
-2. Normalization (x - mean) / std
-3. Tangent computation (simplified: dx / std when stats frozen)
+Per Codex/Gemini consultation, attempted:
+1. Use `torch.ops.aten.native_group_norm` to get mean/rstd from forward pass
+2. Implement custom `jvp()` static method with frozen stats approximation
+3. Use `setup_context()` + `save_for_forward()` for torch.func compatibility
 
-This is beyond pure Python optimization and would require:
-- Writing Triton kernels for GroupNorm JVP
-- Using xformers/Apex fused norm layers with custom JVP rules
-- Or using JAX/XLA which has better forward-mode AD support
+**Result:** PyTorch internal assertion failure:
+```
+RuntimeError: Expected both tensor and its forward grad to be floating point or complex
+INTERNAL ASSERT FAILED at torch/csrc/autograd/autograd_meta.cpp:160
+```
+
+This appears to be a PyTorch bug/limitation when combining:
+- `torch.autograd.Function` with custom `jvp()`
+- `torch.ops.aten.native_group_norm` (returns multiple tensors)
+- `torch.func.jvp` transform
+
+**Conclusion:** Custom JVP for GroupNorm requires either:
+- Custom CUDA/Triton kernels (fused forward + JVP)
+- JAX/XLA (better forward-mode AD support)
+- PyTorch fix for autograd.Function JVP with native ops
+
+**Current recommendation:** Use BF16 + SDPA + hybrid CUDA graph mode (~19% overhead at 25% ratio)
 
 ---
 
@@ -476,11 +490,35 @@ This is beyond pure Python optimization and would require:
 - **Result**: 91.9ms (+115% vs Standard FM)
 - **Current best production implementation**
 
+### Optimization 3: BF16 + SDPA (13% speedup) (2026-01-23)
+
+**Findings:**
+1. Replaced manual attention (`matmul` + `softmax`) with `F.scaled_dot_product_attention` (SDPA)
+2. BF16 enables FlashAttention backend in SDPA, reducing attention JVP overhead
+
+**Benchmark results (A100, batch=32):**
+
+| Mode | FP32 | BF16 | Improvement |
+|------|------|------|-------------|
+| Hybrid CUDA graph | 93.2ms | **81.0ms** | **-13%** |
+| vs Standard FM overhead | +110% | **+72%** | |
+| Eager JVP (_compute_target) | 143.6ms | 116.3ms | -19% |
+
+**At 25% ratio (paper default):**
+- FP32: ~26% overhead
+- **BF16: ~19% overhead** (approaching paper's 16%)
+
+**Key insight:** While `torch.func.jvp` uses FP32 internally for numerical stability, BF16 still helps because:
+1. SDPA uses FlashAttention with BF16 for the attention computation
+2. Memory bandwidth is reduced for non-JVP operations
+3. Forward pass (for prediction) runs in BF16
+
+**Note:** SDPA without BF16 (FP32 mode) shows no improvement - uses `_scaled_dot_product_attention_math` fallback instead of FlashAttention.
+
 ### Attempted Optimizations (No Benefit)
 - **torch.compile**: Incompatible with torch.func.jvp
 - **torch.autograd.forward_ad**: Same cost as torch.func.jvp
 - **FastJVPGroupNorm**: Slower than native (needs custom CUDA kernels)
-- **BF16/FP16**: JVP forces FP32 internally
 
 ### Final Performance
 
@@ -488,8 +526,10 @@ This is beyond pure Python optimization and would require:
 |-------|-------------------|----------------|
 | Initial | 172.8ms | +277% |
 | After JVP Reuse | 145.2ms | +237% |
-| **Hybrid CUDA Graph** | **91.9ms** | **+115%** |
+| Hybrid CUDA Graph (FP32) | 91.9ms | +115% |
+| **Hybrid CUDA Graph (BF16)** | **81.0ms** | **+72%** |
 
 **At 25% ratio (paper default):**
-- Estimated overhead: ~29% (vs paper's claimed 16%)
-- Gap likely due to: JAX/XLA optimizations, custom kernels, or different hardware
+- FP32 estimate: ~26% overhead
+- **BF16 estimate: ~19% overhead** (vs paper's claimed 16%)
+- Remaining gap (~3%) likely due to: JAX/XLA optimizations or custom kernels

@@ -360,6 +360,39 @@ python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow 
 - Higher ratios require smaller batch sizes due to JVP memory overhead
 - ratio=0.5 and ratio=0.75 show competitive final ED values
 
+### 4.4: FID Evaluation (1-NFE MeanFlow Sampling)
+
+**Status:** COMPLETED (2026-01-22)
+
+FID computed on 50,000 samples using MeanFlow 1-step (r=0, t=1) against CIFAR-10 train set:
+
+| Ratio | Epochs | FID (1-NFE) | Best ED |
+|-------|--------|-------------|---------|
+| 0.0 | 20 | 353.15 | 0.239 |
+| 0.25 | 20 | 462.85 | 0.246 |
+| 0.5 | 20 | 333.24 | 0.229 |
+| 0.75 | 20 | **326.58** | 0.68 |
+
+**Comparison to Paper (Table 1 in arXiv:2505.13447):**
+
+| Metric | Paper (ratio=0.75) | Ours (ratio=0.75) | Gap |
+|--------|-------------------|-------------------|-----|
+| Epochs | 19,200 | 20 | 960x less |
+| Batch size | 1024 | 128 (effective) | 8x smaller |
+| FID (1-NFE) | **2.92** | 326.58 | - |
+
+**Analysis:**
+1. **Training scale mismatch:** We've trained for 20 epochs (0.1% of paper's 19,200 epochs). The high FIDs are expected at this early stage.
+2. **ratio=0.75 shows best FID:** Despite higher ED variance, ratio=0.75 achieves the lowest FID (326.58), consistent with paper's choice.
+3. **ratio=0.5 close second:** FID 333.24, only 2% worse than ratio=0.75.
+4. **ratio=0 (standard FM) underperforms:** FID 353.15 with 1-NFE, as expected since it wasn't trained for single-step generation.
+5. **ratio=0.25 worst:** FID 462.85, possibly due to training instability at low ratios.
+
+**To reach paper FID of 2.92:**
+- Need ~960x more training (19,200 epochs)
+- Consider batch_size=1024 via gradient accumulation (currently 128)
+- Estimated compute: ~200 A100-hours for full replication
+
 ---
 
 ## Proposed Experiments
@@ -391,6 +424,18 @@ python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow 
 | 2026-01-20 | Enforced two time channels everywhere (removed 1-channel plumbing) |
 | 2026-01-21 | Hardened Modal infrastructure (12h timeout, 5 retries, auto-resume) |
 | 2026-01-22 | Discovered batch_size=64 with ratio=0.75 OOMs silently; need batch_size=32 |
+| 2026-01-23 | **MAJOR FIX:** Aligned MeanFlow loss with official py-meanflow implementation |
+
+### 2026-01-23: MeanFlow Loss Implementation Fix
+
+**All experiments before this date used an incorrect implementation.** Key fixes:
+
+1. **Time sampling**: Changed from uniform r∈[0,t] to independent logit-normal for both t and r, then sorted
+2. **JVP structure**: Changed from 2-input (z,t) to 3-input (z,r,t) with tangents (v,0,1)
+3. **Adaptive weighting**: Was INVERTED. Old: `loss * (loss+c)^p`. New: `loss / (loss+c)^p`
+4. **Autocast**: Added explicit disable around JVP for numerical stability
+
+The weighting bug was significant - it was amplifying large errors instead of dampening them. Results from Phase 2-4 experiments should be re-run with the corrected implementation for valid comparison to the paper.
 
 ---
 
@@ -452,3 +497,27 @@ python scripts/modal_app.py sync
 # List Modal checkpoints
 python scripts/modal_app.py ckpts
 ```
+
+---
+
+## 2026-01-23: torch.compile loss forward (reduce-overhead) for JVP capture
+
+**Status:** PENDING (benchmark script updated; CUDA run not executed yet)
+
+**Goal:** Check whether compiling the *entire* MeanFlow loss forward with
+`torch.compile(mode="reduce-overhead")` captures and replays JVP operations
+via cudagraph trees, and whether the steady-state step time improves.
+
+**Script:**
+```bash
+# Modal A100 (recommended)
+modal run scripts/modal_app.py::run_benchmark --script-name benchmark_meanflow_loss.py \
+  --script-args "--device cuda --dtype bfloat16 --batch-size 64 --n-runs 50 --warmup 10 \
+  --compile-loss --compile-mode reduce-overhead --log-cudagraphs"
+```
+
+**Notes:**
+- The compiled-loss benchmark uses `full_batch_jvp=True` to avoid control-flow
+  graph breaks inside `MeanFlowLoss.forward`.
+- Check for cudagraph logs and a large drop between `first` and steady-state
+  timings (first run includes compilation/capture).

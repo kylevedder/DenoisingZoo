@@ -6,3 +6,8 @@ weighting_power: 0.5
 weighting_const: 0.0001
 eps: 0.00001
 use_batch_time: false
+# CUDA optimization (set both to true for best CUDA performance):
+# full_batch_jvp: Compute JVP for all samples (removes CPU-GPU sync)
+# use_cuda_graph: Capture JVP in CUDA graph (requires full_batch_jvp=true, CUDA only)
+full_batch_jvp: false
+use_cuda_graph: false
