@@ -239,7 +239,11 @@ Test loss/inference across multiple fixed targets (4 classes, 10 samples/class).
 
 ---
 
-## Phase 4: CIFAR-10 Experiments
+## Phase 4: CIFAR-10 Experiments (OUTDATED - Pre-Fix)
+
+> **⚠️ WARNING: Results below are from BEFORE the 2026-01-23 implementation fix.**
+> These experiments used incorrect time sampling, inverted adaptive weighting, and wrong JVP structure.
+> See "Phase 4b: CIFAR-10 Experiments (Corrected)" for valid results.
 
 ### Preliminary Tests (MPS + Modal Validation)
 
@@ -392,6 +396,89 @@ FID computed on 50,000 samples using MeanFlow 1-step (r=0, t=1) against CIFAR-10
 - Need ~960x more training (19,200 epochs)
 - Consider batch_size=1024 via gradient accumulation (currently 128)
 - Estimated compute: ~200 A100-hours for full replication
+
+---
+
+## Phase 4b: CIFAR-10 Experiments (Corrected Implementation)
+
+**Date:** 2026-01-24
+
+These experiments use the corrected MeanFlow implementation with:
+- Fixed time sampling (independent logit-normal for t and r, then sorted)
+- Fixed JVP structure (3-input with tangents (v,0,1))
+- Fixed adaptive weighting (division not multiplication)
+- New performance optimizations: `full_batch_jvp=true`, `use_cuda_graph=true`
+- bf16 precision throughout
+
+### 4b.1: CIFAR-10 Standard FM Baseline (ratio=0, 20 epochs)
+
+**Status:** COMPLETED
+
+```bash
+python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow epochs=20 \
+  loss.meanflow_ratio=0 loss.logit_normal_mean=-2.0 loss.logit_normal_std=2.0 \
+  loss.weighting_power=0.75 dataloaders.train.batch_size=128 optimizer.lr=1e-4 \
+  precision=bf16 eval_every=5 save_every=5 run_name=cifar10_ratio0_20ep_v2 resume=false
+```
+
+| Epoch | Loss | Energy Distance |
+|-------|------|-----------------|
+| 5 | 4.807 | 2.76 |
+| 10 | 4.761 | 2.61 |
+| 15 | 4.742 | 3.20 |
+| 20 | 4.727 | **2.45** |
+
+**Checkpoints:** `cifar10_ratio0_20ep_v2_epoch_{0005,0010,0015,0020}.pt`
+
+**Note:** Loss scale differs from v1 due to corrected implementation. Speed: ~6.5 it/s (~1 min/epoch). Best ED at epoch 20.
+
+### 4b.2: CIFAR-10 MeanFlow ratio=0.25 (20 epochs)
+
+**Status:** RUNNING
+
+```bash
+# NOTE: full_batch_jvp=true with bs=128 OOMs. Using bs=32 with grad_accum=4.
+python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow epochs=20 \
+  loss.meanflow_ratio=0.25 loss.logit_normal_mean=-2.0 loss.logit_normal_std=2.0 \
+  loss.weighting_power=0.75 dataloaders.train.batch_size=32 gradient_accumulation_steps=4 \
+  optimizer.lr=1e-4 precision=bf16 eval_every=5 save_every=5 \
+  run_name=cifar10_ratio025_20ep_v2c resume=false
+```
+
+| Epoch | Loss | Energy Distance |
+|-------|------|-----------------|
+| 5 | TBD | TBD |
+| 10 | TBD | TBD |
+| 15 | TBD | TBD |
+| 20 | TBD | TBD |
+
+**Note:** Speed ~2.8 it/s with selective JVP. Estimated ~9 min/epoch.
+
+### 4b.3: CIFAR-10 MeanFlow ratio=0.5 (20 epochs)
+
+**Status:** PENDING
+
+```bash
+python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow epochs=20 \
+  loss.meanflow_ratio=0.5 loss.logit_normal_mean=-2.0 loss.logit_normal_std=2.0 \
+  loss.weighting_power=0.75 loss.full_batch_jvp=true loss.use_cuda_graph=true \
+  dataloaders.train.batch_size=128 optimizer.lr=1e-4 \
+  precision=bf16 eval_every=5 save_every=5 run_name=cifar10_ratio05_20ep_v2 resume=false
+```
+
+### 4b.4: CIFAR-10 MeanFlow ratio=0.75 (20 epochs)
+
+**Status:** PENDING
+
+```bash
+python launcher.py --backend modal dataloaders=cifar10 model=unet loss=meanflow epochs=20 \
+  loss.meanflow_ratio=0.75 loss.logit_normal_mean=-2.0 loss.logit_normal_std=2.0 \
+  loss.weighting_power=0.75 loss.full_batch_jvp=true loss.use_cuda_graph=true \
+  dataloaders.train.batch_size=64 gradient_accumulation_steps=2 optimizer.lr=1e-4 \
+  precision=bf16 eval_every=5 save_every=5 run_name=cifar10_ratio075_20ep_v2 resume=false
+```
+
+**Note:** Using batch_size=64 with grad_accum=2 due to JVP memory overhead at high ratios.
 
 ---
 
